@@ -27,7 +27,8 @@ mcp = MCPServer(
         "created by an operator through the local CLI. Bounded network probes additionally "
         "require operator host and CIDR allowlists. No arbitrary shell, exploit, credential, "
         "password-attack, or payload execution is exposed. The posture runner uses a fixed, "
-        "fail-closed sequence and never chooses attack actions from results."
+        "fail-closed sequence and never chooses attack actions from results. Education "
+        "scenarios are offline simulations locked to training.invalid and dry-run mode."
     ),
 )
 
@@ -188,6 +189,21 @@ def run_posture_assessment(
     return _safe_call(
         lambda: get_service().run_posture_assessment(engagement_id, url_target, host_target, ports)
     )
+
+
+@mcp.tool(
+    title="Simulate education-only security scenario",
+    annotations=ToolAnnotations(
+        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+    ),
+)
+def simulate_education_scenario(
+    engagement_id: str,
+    scenario: str,
+    difficulty: str = "beginner",
+) -> dict[str, Any]:
+    """Run an offline defensive tabletop with no real target or operational actions."""
+    return _safe_call(lambda: get_service().simulate_education(engagement_id, scenario, difficulty))
 
 
 @mcp.tool(

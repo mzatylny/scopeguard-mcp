@@ -348,3 +348,38 @@ def test_posture_assessment_rejects_mismatched_hosts_and_missing_capability(tmp_
         service.run_posture_assessment(
             missing_tls["id"], "https://example.com/", "example.com", [443]
         )
+
+
+def test_education_simulation_is_dry_run_only_offline_and_audited(tmp_path, monkeypatch):
+    service = ScopeGuardService(_settings(tmp_path))
+    monkeypatch.setattr(
+        service_module,
+        "resolve_allowed_endpoint",
+        lambda *args, **kwargs: pytest.fail("education simulation attempted network resolution"),
+    )
+    engagement = _create(
+        service,
+        "training.invalid",
+        ["simulate:education", "audit:read"],
+        mode="dry-run",
+    )
+    result = service.simulate_education(engagement["id"], "repository-secret", "intermediate")
+    assert result["status"] == "simulated"
+    assert result["simulation"]["target"] == "training.invalid"
+    assert result["simulation"]["operational"] is False
+    events = service.list_audit(engagement["id"])["events"]
+    assert any(
+        event["action"] == "education.simulate" and event["outcome"] == "allowed"
+        for event in events
+    )
+
+
+def test_education_simulation_rejects_execute_mode_and_real_target_scope(tmp_path):
+    service = ScopeGuardService(_settings(tmp_path))
+    execute = _create(service, "training.invalid", ["simulate:education"], mode="execute")
+    with pytest.raises(AuthorizationError, match="dry-run"):
+        service.simulate_education(execute["id"], "web-hardening")
+
+    real_scope = _create(service, "example.com", ["simulate:education"], mode="dry-run")
+    with pytest.raises(AuthorizationError, match="outside engagement scope"):
+        service.simulate_education(real_scope["id"], "web-hardening")

@@ -21,6 +21,7 @@ class Capability(StrEnum):
     INSPECT_TLS = "inspect:tls"
     PROBE_TCP_PORTS = "probe:tcp-ports"
     RUN_POSTURE_ASSESSMENT = "run:posture-assessment"
+    SIMULATE_EDUCATION = "simulate:education"
     READ_AUDIT = "audit:read"
 
 

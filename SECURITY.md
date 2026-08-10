@@ -32,6 +32,7 @@ The primary controls are:
 - hostname plus resolved-address network allowlists
 - fixed HTTP HEAD, TLS handshake, and connect-only TCP probes with strict limits
 - fixed-sequence posture orchestration with full preflight and fail-closed execution
+- offline education simulation restricted to dry-run mode and `training.invalid`
 - no arbitrary subprocess, shell, request, exploit, password, payload, or dynamic-code tool
 - redacted secret findings
 - tamper-evident audit verification
@@ -50,6 +51,9 @@ The primary controls are:
   services and are not a replacement for a reviewed professional assessment.
 - The posture runner does not make risk-based decisions, select targets or techniques,
   exploit findings, or retry failed probes. It is deliberately not an attack agent.
+- Education scenarios are static defensive table-tops with no network, filesystem,
+  command, payload, credential, or real-target input path. An education label never
+  enables otherwise excluded operational behavior.
 - ScopeGuard does not establish that a ticket represents legal authorization; the human
   operator remains responsible for verifying it.
 

@@ -21,6 +21,8 @@ flowchart LR
     M --> J
     N --> M
     N --> J
+    B --> O["Offline education simulator"]
+    O --> J
 ```
 
 ## Trust boundaries
@@ -40,6 +42,8 @@ flowchart LR
    request, exploit, credential, password-attack, or payload tool.
 7. The posture workflow preflights every capability and target, follows a fixed sequence,
    stops on the first error, and cannot choose follow-on techniques from results.
+8. The education simulator is restricted to dry-run engagements scoped to the reserved
+   `training.invalid` domain and has no runtime, filesystem, or network adapter.
 
 ## Data flow
 

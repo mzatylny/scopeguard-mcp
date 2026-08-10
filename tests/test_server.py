@@ -44,6 +44,14 @@ class FakeService:
             "kind": "workflow",
         }
 
+    def simulate_education(self, engagement_id, scenario, difficulty):
+        return {
+            "id": engagement_id,
+            "scenario": scenario,
+            "difficulty": difficulty,
+            "kind": "education",
+        }
+
     def list_audit(self, engagement_id, limit):
         return {"id": engagement_id, "limit": limit}
 
@@ -72,6 +80,10 @@ def test_server_tools_delegate_and_force_dry_run(monkeypatch):
             "kind"
         ]
         == "workflow"
+    )
+    assert (
+        server.simulate_education_scenario("eng", "web-hardening", "advanced")["kind"]
+        == "education"
     )
     assert server.list_audit_events("eng", 5)["limit"] == 5
     assert server.verify_audit_chain()["valid"] is True

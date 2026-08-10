@@ -20,6 +20,7 @@ from .errors import AuthorizationError, NetworkProbeError, ScopeGuardError
 from .models import Capability, Engagement, EngagementMode, NormalizedTarget
 from .policy import PolicyEngine
 from .storage import Store
+from .training import TRAINING_TARGET, simulate_training_scenario
 
 
 class ScopeGuardService:
@@ -489,6 +490,41 @@ class ScopeGuardService:
             "exploitation": False,
             "results": results,
         }
+
+    def simulate_education(
+        self,
+        engagement_id: str,
+        scenario: str,
+        difficulty: str = "beginner",
+    ) -> dict[str, Any]:
+        """Run a deterministic offline tabletop against the reserved training target."""
+        engagement, _ = self.policy.authorize(
+            engagement_id=engagement_id,
+            capability=Capability.SIMULATE_EDUCATION,
+            target=TRAINING_TARGET,
+        )
+        if engagement.mode is not EngagementMode.DRY_RUN:
+            reason = "education simulation requires a dry-run engagement"
+            self.store.append_audit(
+                engagement_id=engagement_id,
+                action="education.simulate",
+                outcome="denied",
+                details={"target": TRAINING_TARGET, "reason": reason},
+            )
+            raise AuthorizationError(reason)
+        simulation = simulate_training_scenario(scenario, difficulty)
+        self.store.append_audit(
+            engagement_id=engagement_id,
+            action="education.simulate",
+            outcome="allowed",
+            details={
+                "target": TRAINING_TARGET,
+                "scenario": simulation["scenario"],
+                "difficulty": simulation["difficulty"],
+                "phases": len(simulation["phases"]),
+            },
+        )
+        return {"ok": True, "status": "simulated", "simulation": simulation}
 
     def scan_repository(self, engagement_id: str, path: str) -> dict[str, Any]:
         engagement, normalized = self.policy.authorize(

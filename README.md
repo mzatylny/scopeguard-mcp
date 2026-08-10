@@ -48,6 +48,7 @@ credential capture, or autonomous attack-chain execution.
 - `inspect_tls` — validate one allowlisted TLS handshake and inspect its certificate
 - `probe_tcp_ports` — bounded TCP connects to one allowlisted host without banner capture
 - `run_posture_assessment` — run the fixed TCP → TLS → HTTP posture workflow
+- `simulate_education_scenario` — run an offline defensive tabletop on `training.invalid`
 - `list_audit_events` and `verify_audit_chain` — inspect and verify evidence
 
 ## Quick start
@@ -155,6 +156,29 @@ It does not choose new tools or targets from results, exploit findings, submit p
 retry with different techniques, or start follow-on actions. A dry-run returns the exact
 planned sequence without making a connection.
 
+### Education-only simulation
+
+`simulate_education_scenario` teaches security response through deterministic offline
+tabletops. It accepts no real target: the engagement must scope exactly the reserved domain
+`training.invalid`, and execute-mode engagements are rejected. The simulator never calls
+the network, reads files, invokes commands, generates payloads, exposes credentials, or
+selects operational attack actions.
+
+```bash
+scopeguard create-engagement \
+  --title "Offline security tabletop" \
+  --ticket EDU-100 \
+  --target training.invalid \
+  --capability simulate:education \
+  --capability audit:read \
+  --mode dry-run \
+  --expires-in-minutes 60
+```
+
+Supported scenarios are `exposed-service`, `web-hardening`, and `repository-secret`, at
+`beginner`, `intermediate`, or `advanced` difficulty. Results contain only synthetic
+events, defensive signals, learner questions, and defensive response actions.
+
 ## Capabilities
 
 | Capability | Allows |
@@ -166,6 +190,7 @@ planned sequence without making a connection.
 | `inspect:tls` | One allowlisted, certificate-validating TLS handshake |
 | `probe:tcp-ports` | Bounded connect-only TCP checks against one host |
 | `run:posture-assessment` | Fixed, fail-closed orchestration of the bounded probes |
+| `simulate:education` | Offline defensive tabletop locked to `training.invalid` |
 | `audit:read` | Reading engagement-specific audit events |
 
 ## Configuration
