@@ -5,7 +5,7 @@ import pytest
 from scopeguard_mcp import service as service_module
 from scopeguard_mcp.analyzers.network import ResolvedEndpoint
 from scopeguard_mcp.config import Settings
-from scopeguard_mcp.errors import AuthorizationError
+from scopeguard_mcp.errors import AuthorizationError, NetworkProbeError
 from scopeguard_mcp.service import ScopeGuardService
 
 
@@ -221,3 +221,130 @@ def test_tls_probe_validates_port_before_resolution(tmp_path, monkeypatch):
     url = _create(service, "https://example.com:8443/", ["inspect:tls"], mode="execute")
     with pytest.raises(ValueError, match="conflicts"):
         service.inspect_tls(url["id"], "https://example.com:8443/", 443)
+
+
+def _create_workflow_engagement(service, *, mode="dry-run", scheme="https", include_tls=True):
+    capabilities = [
+        "run:posture-assessment",
+        "probe:http",
+        "probe:tcp-ports",
+        "audit:read",
+    ]
+    if include_tls:
+        capabilities.append("inspect:tls")
+    return service.create_engagement(
+        title="Guarded posture workflow",
+        ticket="SEC-200",
+        targets=[f"{scheme}://example.com/", "example.com"],
+        capabilities=capabilities,
+        mode=mode,
+        expires_in_minutes=30,
+    )["engagement"]
+
+
+def test_posture_assessment_dry_run_preflights_fixed_sequence(tmp_path):
+    service = ScopeGuardService(_settings(tmp_path))
+    engagement = _create_workflow_engagement(service)
+    result = service.run_posture_assessment(
+        engagement["id"], "https://example.com/", "example.com", [443, 80, 443]
+    )
+    assert result["status"] == "planned"
+    assert result["steps"] == ["probe_tcp_ports", "inspect_tls", "probe_http"]
+    assert result["stop_on_error"] is True
+    assert result["dynamic_tool_selection"] is False
+    assert result["exploitation"] is False
+
+
+def test_posture_assessment_http_workflow_skips_tls(tmp_path):
+    service = ScopeGuardService(_settings(tmp_path))
+    engagement = _create_workflow_engagement(service, scheme="http", include_tls=False)
+    result = service.run_posture_assessment(
+        engagement["id"], "http://example.com/", "example.com", [80]
+    )
+    assert result["steps"] == ["probe_tcp_ports", "probe_http"]
+
+
+def test_posture_assessment_executes_only_fixed_preflighted_steps(tmp_path, monkeypatch):
+    service = ScopeGuardService(_settings(tmp_path, execution_enabled=True, network_enabled=True))
+    engagement = _create_workflow_engagement(service, mode="execute")
+    calls = []
+
+    def tcp(*args):
+        calls.append("tcp")
+        return {"status": "completed"}
+
+    def tls(*args):
+        calls.append("tls")
+        return {"status": "completed"}
+
+    def http(*args):
+        calls.append("http")
+        return {"status": "completed"}
+
+    monkeypatch.setattr(service, "probe_tcp_ports", tcp)
+    monkeypatch.setattr(service, "inspect_tls", tls)
+    monkeypatch.setattr(service, "probe_http", http)
+    result = service.run_posture_assessment(
+        engagement["id"], "https://example.com/", "example.com", [80, 443]
+    )
+    assert calls == ["tcp", "tls", "http"]
+    assert result["completed_steps"] == [
+        "probe_tcp_ports",
+        "inspect_tls",
+        "probe_http",
+    ]
+    assert result["workflow"] == "fixed-sequence"
+
+
+def test_posture_assessment_stops_on_first_error_and_audits(tmp_path, monkeypatch):
+    service = ScopeGuardService(_settings(tmp_path, execution_enabled=True, network_enabled=True))
+    engagement = _create_workflow_engagement(service, mode="execute")
+    monkeypatch.setattr(service, "probe_tcp_ports", lambda *args: {"status": "completed"})
+
+    def fail_tls(*args):
+        raise NetworkProbeError("TLS validation failed")
+
+    monkeypatch.setattr(service, "inspect_tls", fail_tls)
+    monkeypatch.setattr(
+        service,
+        "probe_http",
+        lambda *args: pytest.fail("workflow continued after an error"),
+    )
+    with pytest.raises(NetworkProbeError, match="TLS validation"):
+        service.run_posture_assessment(
+            engagement["id"], "https://example.com/", "example.com", [443]
+        )
+    events = service.list_audit(engagement["id"])["events"]
+    workflow_error = next(
+        event
+        for event in events
+        if event["action"] == "posture.run" and event["outcome"] == "error"
+    )
+    assert workflow_error["details"]["completed_steps"] == ["probe_tcp_ports"]
+
+
+def test_posture_assessment_rejects_mismatched_hosts_and_missing_capability(tmp_path):
+    service = ScopeGuardService(_settings(tmp_path))
+    mismatch = service.create_engagement(
+        title="Mismatched workflow",
+        ticket="SEC-201",
+        targets=["https://example.com/", "other.example"],
+        capabilities=[
+            "run:posture-assessment",
+            "probe:http",
+            "probe:tcp-ports",
+            "inspect:tls",
+        ],
+        mode="dry-run",
+        expires_in_minutes=30,
+    )["engagement"]
+    with pytest.raises(ValueError, match="same host"):
+        service.run_posture_assessment(
+            mismatch["id"], "https://example.com/", "other.example", [443]
+        )
+
+    missing_tls = _create_workflow_engagement(service, include_tls=False)
+    with pytest.raises(AuthorizationError, match="inspect:tls"):
+        service.run_posture_assessment(
+            missing_tls["id"], "https://example.com/", "example.com", [443]
+        )

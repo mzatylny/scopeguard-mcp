@@ -16,7 +16,7 @@ from .analyzers import (
     scan_repository,
 )
 from .config import Settings
-from .errors import AuthorizationError, NetworkProbeError
+from .errors import AuthorizationError, NetworkProbeError, ScopeGuardError
 from .models import Capability, Engagement, EngagementMode, NormalizedTarget
 from .policy import PolicyEngine
 from .storage import Store
@@ -117,6 +117,11 @@ class ScopeGuardService:
                 {
                     "id": "tcp.connect",
                     "kind": "bounded-network",
+                    "available": self._network_available,
+                },
+                {
+                    "id": "workflow.posture",
+                    "kind": "fixed-sequence",
                     "available": self._network_available,
                 },
             ]
@@ -336,21 +341,13 @@ class ScopeGuardService:
         _, normalized = authorized
         if normalized.kind not in {"domain", "ip"}:
             raise ValueError("TCP probe requires a domain or single IP target")
-        if not ports:
-            raise ValueError("at least one TCP port is required")
-        if any(not isinstance(port, int) or isinstance(port, bool) for port in ports):
-            raise ValueError("TCP ports must be integers")
-        unique_ports = sorted(set(ports))
-        if len(unique_ports) > self.settings.max_ports:
-            raise ValueError(f"TCP probe is limited to {self.settings.max_ports} unique ports")
-        if any(not 1 <= port <= 65_535 for port in unique_ports):
-            raise ValueError("TCP ports must be between 1 and 65535")
+        unique_ports = self._validate_ports(ports)
         endpoint = self._resolve_endpoint(
             engagement_id, action, normalized.value, unique_ports[0], normalized.display
         )
         result = probe_tcp_ports(
             endpoint,
-            ports,
+            unique_ports,
             timeout=self.settings.network_timeout_seconds,
             max_ports=self.settings.max_ports,
         )
@@ -366,6 +363,132 @@ class ScopeGuardService:
             },
         )
         return {"ok": True, "status": "completed", "probe": result}
+
+    def _validate_ports(self, ports: list[int]) -> list[int]:
+        if not ports:
+            raise ValueError("at least one TCP port is required")
+        if any(not isinstance(port, int) or isinstance(port, bool) for port in ports):
+            raise ValueError("TCP ports must be integers")
+        unique_ports = sorted(set(ports))
+        if len(unique_ports) > self.settings.max_ports:
+            raise ValueError(f"TCP probe is limited to {self.settings.max_ports} unique ports")
+        if any(not 1 <= port <= 65_535 for port in unique_ports):
+            raise ValueError("TCP ports must be between 1 and 65535")
+        return unique_ports
+
+    def run_posture_assessment(
+        self,
+        engagement_id: str,
+        url_target: str,
+        host_target: str,
+        ports: list[int],
+    ) -> dict[str, Any]:
+        """Run only the fixed bounded probe sequence after a complete preflight."""
+        action = "posture.run"
+        engagement, normalized_url = self.policy.authorize(
+            engagement_id=engagement_id,
+            capability=Capability.RUN_POSTURE_ASSESSMENT,
+            target=url_target,
+        )
+        if normalized_url.kind != "url":
+            raise ValueError("posture assessment requires an http or https URL target")
+        self.policy.authorize(
+            engagement_id=engagement_id,
+            capability=Capability.PROBE_HTTP,
+            target=url_target,
+        )
+        _, normalized_host = self.policy.authorize(
+            engagement_id=engagement_id,
+            capability=Capability.PROBE_TCP_PORTS,
+            target=host_target,
+        )
+        if normalized_host.kind not in {"domain", "ip"}:
+            raise ValueError("posture assessment host must be a domain or single IP")
+        parsed = urlsplit(normalized_url.value)
+        if parsed.hostname != normalized_host.value:
+            raise ValueError("URL and host targets must identify the same host")
+        include_tls = parsed.scheme == "https"
+        if include_tls:
+            self.policy.authorize(
+                engagement_id=engagement_id,
+                capability=Capability.INSPECT_TLS,
+                target=url_target,
+            )
+        unique_ports = self._validate_ports(ports)
+        steps = ["probe_tcp_ports"]
+        if include_tls:
+            steps.append("inspect_tls")
+        steps.append("probe_http")
+        if engagement.mode is EngagementMode.DRY_RUN:
+            self.store.append_audit(
+                engagement_id=engagement_id,
+                action=action,
+                outcome="planned",
+                details={
+                    "url_target": normalized_url.display,
+                    "host_target": normalized_host.display,
+                    "ports": unique_ports,
+                    "steps": steps,
+                },
+            )
+            return {
+                "ok": True,
+                "status": "planned",
+                "workflow": "fixed-sequence",
+                "steps": steps,
+                "stop_on_error": True,
+                "dynamic_tool_selection": False,
+                "exploitation": False,
+            }
+        self._authorize_network(
+            engagement_id=engagement_id,
+            capability=Capability.RUN_POSTURE_ASSESSMENT,
+            target=url_target,
+            action=action,
+        )
+        completed_steps: list[str] = []
+        results: dict[str, Any] = {}
+        try:
+            results["tcp"] = self.probe_tcp_ports(
+                engagement_id, normalized_host.display, unique_ports
+            )
+            completed_steps.append("probe_tcp_ports")
+            if include_tls:
+                results["tls"] = self.inspect_tls(engagement_id, normalized_url.display)
+                completed_steps.append("inspect_tls")
+            results["http"] = self.probe_http(engagement_id, normalized_url.display)
+            completed_steps.append("probe_http")
+        except (ScopeGuardError, ValueError) as exc:
+            self.store.append_audit(
+                engagement_id=engagement_id,
+                action=action,
+                outcome="error",
+                details={
+                    "target": normalized_url.display,
+                    "completed_steps": completed_steps,
+                    "reason": str(exc),
+                },
+            )
+            raise
+        self.store.append_audit(
+            engagement_id=engagement_id,
+            action=action,
+            outcome="allowed",
+            details={
+                "target": normalized_url.display,
+                "completed_steps": completed_steps,
+            },
+        )
+        return {
+            "ok": True,
+            "status": "completed",
+            "workflow": "fixed-sequence",
+            "completed_steps": completed_steps,
+            "stop_on_error": True,
+            "dynamic_tool_selection": False,
+            "exploitation": False,
+            "results": results,
+        }
 
     def scan_repository(self, engagement_id: str, path: str) -> dict[str, Any]:
         engagement, normalized = self.policy.authorize(

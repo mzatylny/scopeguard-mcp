@@ -31,6 +31,7 @@ The primary controls are:
 - bounded file count and file size
 - hostname plus resolved-address network allowlists
 - fixed HTTP HEAD, TLS handshake, and connect-only TCP probes with strict limits
+- fixed-sequence posture orchestration with full preflight and fail-closed execution
 - no arbitrary subprocess, shell, request, exploit, password, payload, or dynamic-code tool
 - redacted secret findings
 - tamper-evident audit verification
@@ -47,6 +48,8 @@ The primary controls are:
   authentication. TLS probing requires a certificate-validating handshake.
 - TCP results distinguish only `open` from `closed-or-filtered`; they do not identify
   services and are not a replacement for a reviewed professional assessment.
+- The posture runner does not make risk-based decisions, select targets or techniques,
+  exploit findings, or retry failed probes. It is deliberately not an attack agent.
 - ScopeGuard does not establish that a ticket represents legal authorization; the human
   operator remains responsible for verifying it.
 

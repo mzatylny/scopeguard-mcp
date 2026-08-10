@@ -9,6 +9,7 @@ All notable changes will be documented here.
 - Pinned outbound connections to pre-authorized DNS answers to mitigate rebinding
 - Added sensitive response-header redaction and a no-redirect HTTP policy
 - Added audit evidence and adversarial tests for every network safety boundary
+- Added a fixed-sequence, fully preflighted, fail-closed posture assessment runner
 
 ## 0.1.0 - 2026-08-10
 

@@ -26,7 +26,8 @@ mcp = MCPServer(
         "MCP clients can create dry-run engagements only; execute engagements must be "
         "created by an operator through the local CLI. Bounded network probes additionally "
         "require operator host and CIDR allowlists. No arbitrary shell, exploit, credential, "
-        "password-attack, or payload execution is exposed."
+        "password-attack, or payload execution is exposed. The posture runner uses a fixed, "
+        "fail-closed sequence and never chooses attack actions from results."
     ),
 )
 
@@ -169,6 +170,24 @@ def inspect_tls(engagement_id: str, target: str, port: int | None = None) -> dic
 def probe_tcp_ports(engagement_id: str, target: str, ports: list[int]) -> dict[str, Any]:
     """Try bounded TCP connects to one allowlisted host without banner collection."""
     return _safe_call(lambda: get_service().probe_tcp_ports(engagement_id, target, ports))
+
+
+@mcp.tool(
+    title="Run guarded posture assessment",
+    annotations=ToolAnnotations(
+        readOnlyHint=True, destructiveHint=False, idempotentHint=False, openWorldHint=True
+    ),
+)
+def run_posture_assessment(
+    engagement_id: str,
+    url_target: str,
+    host_target: str,
+    ports: list[int],
+) -> dict[str, Any]:
+    """Run a fixed, fail-closed sequence of the authorized HTTP, TLS, and TCP probes."""
+    return _safe_call(
+        lambda: get_service().run_posture_assessment(engagement_id, url_target, host_target, ports)
+    )
 
 
 @mcp.tool(

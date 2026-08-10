@@ -25,6 +25,7 @@ async def test_mcp_v2_discovers_and_calls_structured_tools(tmp_path, monkeypatch
                 "probe_http",
                 "inspect_tls",
                 "probe_tcp_ports",
+                "run_posture_assessment",
                 "verify_audit_chain",
             }.issubset(names)
             health = await client.call_tool("health", {})

@@ -10,6 +10,7 @@ flowchart LR
     C --> F["Dual execution gate"]
     C --> K["Network execution gate"]
     K --> L["Host plus CIDR allowlists"]
+    L --> N["Fixed fail-closed posture workflow"]
     D --> G["Offline header analyzer"]
     F --> H["Read-only repository analyzer"]
     L --> M["Bounded HTTP, TLS, and TCP probes"]
@@ -18,6 +19,8 @@ flowchart LR
     G --> J
     H --> J
     M --> J
+    N --> M
+    N --> J
 ```
 
 ## Trust boundaries
@@ -35,6 +38,8 @@ flowchart LR
    approved address directly to reduce DNS-rebinding risk.
 6. The server does not expose an arbitrary command, shell, Python execution, arbitrary
    request, exploit, credential, password-attack, or payload tool.
+7. The posture workflow preflights every capability and target, follows a fixed sequence,
+   stops on the first error, and cannot choose follow-on techniques from results.
 
 ## Data flow
 

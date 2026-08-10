@@ -47,6 +47,7 @@ credential capture, or autonomous attack-chain execution.
 - `probe_http` — make one allowlisted HEAD request without credentials or redirects
 - `inspect_tls` — validate one allowlisted TLS handshake and inspect its certificate
 - `probe_tcp_ports` — bounded TCP connects to one allowlisted host without banner capture
+- `run_posture_assessment` — run the fixed TCP → TLS → HTTP posture workflow
 - `list_audit_events` and `verify_audit_chain` — inspect and verify evidence
 
 ## Quick start
@@ -129,6 +130,7 @@ scopeguard create-engagement \
   --capability probe:http \
   --capability inspect:tls \
   --capability probe:tcp-ports \
+  --capability run:posture-assessment \
   --capability audit:read \
   --mode execute \
   --expires-in-minutes 30
@@ -141,6 +143,18 @@ connection to a pre-authorized DNS answer, and never follows redirects. Sensitiv
 response headers are redacted. The TCP tool accepts at most 32 unique ports by default,
 uses connect-only checks, and never sends application data or captures banners.
 
+### Guarded autonomous workflow
+
+`run_posture_assessment` automates only a predeclared posture sequence. Before the first
+connection it validates the workflow capability, every underlying probe capability, both
+the URL and host scopes, target-host equality, the port limit, the execute gate, and the
+network gate. HTTPS runs TCP → TLS → HTTP; HTTP runs TCP → HTTP. The workflow stops at the
+first error and records completed steps in the audit chain.
+
+It does not choose new tools or targets from results, exploit findings, submit payloads,
+retry with different techniques, or start follow-on actions. A dry-run returns the exact
+planned sequence without making a connection.
+
 ## Capabilities
 
 | Capability | Allows |
@@ -151,6 +165,7 @@ uses connect-only checks, and never sends application data or captures banners.
 | `probe:http` | One allowlisted, no-redirect HTTP HEAD request |
 | `inspect:tls` | One allowlisted, certificate-validating TLS handshake |
 | `probe:tcp-ports` | Bounded connect-only TCP checks against one host |
+| `run:posture-assessment` | Fixed, fail-closed orchestration of the bounded probes |
 | `audit:read` | Reading engagement-specific audit events |
 
 ## Configuration
@@ -177,7 +192,8 @@ guidance; binding an unauthenticated security service to a port is not accepted 
 ScopeGuard supports authorized posture testing, not unrestricted offensive automation.
 It does not provide arbitrary requests or commands, password attacks, credential capture,
 exploit or payload generation, persistence, evasion, denial of service, CIDR-wide scans,
-or autonomous attack chains. These exclusions are trust boundaries, not missing tools.
+or autonomous attack chains. The fixed posture runner is defensive orchestration, not an
+attack agent; these exclusions are trust boundaries, not missing tools.
 
 ## Repository analyzer
 

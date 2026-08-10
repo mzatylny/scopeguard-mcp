@@ -20,6 +20,7 @@ class Capability(StrEnum):
     PROBE_HTTP = "probe:http"
     INSPECT_TLS = "inspect:tls"
     PROBE_TCP_PORTS = "probe:tcp-ports"
+    RUN_POSTURE_ASSESSMENT = "run:posture-assessment"
     READ_AUDIT = "audit:read"
 
 
