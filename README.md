@@ -5,9 +5,9 @@
 [![MCP](https://img.shields.io/badge/MCP-2.0-purple.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-ScopeGuard is a policy-first defensive security operations server for MCP. It gives AI
-clients useful repository and web-security analysis while keeping authorization,
-execution, target scope, and auditability under operator control.
+ScopeGuard is a policy-first defensive security and bounded posture-testing server for
+MCP. It gives AI clients useful repository, HTTP, TLS, and single-host TCP analysis while
+keeping authorization, execution, target scope, and auditability under operator control.
 
 It is designed as a safer, maintainable alternative to broad shell-driven pentest
 orchestrators. “Better” here means stronger trust boundaries and engineering quality—not
@@ -27,7 +27,7 @@ baseline. ScopeGuard is built on the
 | Client transport | Local stdio only | MCP client plus local Flask execution API |
 | Authorization | Expiring engagements, target scopes, capabilities | Caller-supplied targets sent to execution endpoints |
 | Execution | Operator-created execute engagement **and** server-side environment gate | Tool call can directly launch commands |
-| Process control | No arbitrary shell or command tool | Broad subprocess wrappers |
+| Process control | Fixed built-in analyzers and bounded probes; no arbitrary shell | Broad subprocess wrappers |
 | Audit | SQLite WAL plus a verifiable SHA-256 hash chain | Conventional logs |
 | Secret handling | Findings are fingerprinted; matched values are never returned | Tool output may contain raw secrets |
 | Quality | CI matrix, linting, packaging, 90% coverage floor | No test or CI suite visible in the inspected tree |
@@ -44,6 +44,9 @@ credential capture, or autonomous attack-chain execution.
 - `plan_assessment` — produce a bounded web or repository baseline plan
 - `analyze_headers` — inspect caller-supplied HTTP headers without making a request
 - `scan_repository` — read-only built-in Python risk and secret checks
+- `probe_http` — make one allowlisted HEAD request without credentials or redirects
+- `inspect_tls` — validate one allowlisted TLS handshake and inspect its certificate
+- `probe_tcp_ports` — bounded TCP connects to one allowlisted host without banner capture
 - `list_audit_events` and `verify_audit_chain` — inspect and verify evidence
 
 ## Quick start
@@ -104,6 +107,40 @@ The returned engagement ID is required by `scan_repository`. Both the engagement
 scope and `SCOPEGUARD_ALLOWED_ROOTS` must contain the requested path. Symlinks are
 resolved before either policy is evaluated.
 
+### Bounded network posture testing
+
+Network probes are off by default and require an additional operator gate. A hostname
+must match `SCOPEGUARD_ALLOWED_HOSTS`, and every address returned by DNS must fit
+`SCOPEGUARD_ALLOWED_NETWORKS`. Direct IP targets must fit the network allowlist. This
+two-part rule prevents a permitted name from resolving to an unexpected address.
+
+```bash
+export SCOPEGUARD_STATE_DIR=/absolute/path/to/scopeguard-state
+export SCOPEGUARD_EXECUTION_ENABLED=true
+export SCOPEGUARD_NETWORK_ENABLED=true
+export SCOPEGUARD_ALLOWED_HOSTS=staging.example.com,*.staging.example.com
+export SCOPEGUARD_ALLOWED_NETWORKS=192.0.2.0/24,2001:db8::/32
+
+scopeguard create-engagement \
+  --title "Authorized staging posture review" \
+  --ticket SEC-5678 \
+  --target staging.example.com \
+  --target https://staging.example.com/ \
+  --capability probe:http \
+  --capability inspect:tls \
+  --capability probe:tcp-ports \
+  --capability audit:read \
+  --mode execute \
+  --expires-in-minutes 30
+
+scopeguard-mcp
+```
+
+The HTTP tool sends only `HEAD`, does not accept credentials or a request body, pins the
+connection to a pre-authorized DNS answer, and never follows redirects. Sensitive
+response headers are redacted. The TCP tool accepts at most 32 unique ports by default,
+uses connect-only checks, and never sends application data or captures banners.
+
 ## Capabilities
 
 | Capability | Allows |
@@ -111,6 +148,9 @@ resolved before either policy is evaluated.
 | `plan:assessment` | Bounded web/repository planning for an in-scope target |
 | `analyze:headers` | Offline analysis of supplied HTTP headers |
 | `scan:repository` | Built-in read-only scan, subject to both execution gates |
+| `probe:http` | One allowlisted, no-redirect HTTP HEAD request |
+| `inspect:tls` | One allowlisted, certificate-validating TLS handshake |
+| `probe:tcp-ports` | Bounded connect-only TCP checks against one host |
 | `audit:read` | Reading engagement-specific audit events |
 
 ## Configuration
@@ -122,10 +162,22 @@ resolved before either policy is evaluated.
 | `SCOPEGUARD_EXECUTION_ENABLED` | `false` | Enables execute engagements when `true` |
 | `SCOPEGUARD_MAX_FILES` | `5000` | Repository scan file ceiling |
 | `SCOPEGUARD_MAX_FILE_BYTES` | `1000000` | Per-file read ceiling |
+| `SCOPEGUARD_NETWORK_ENABLED` | `false` | Independently enables bounded network probes |
+| `SCOPEGUARD_ALLOWED_HOSTS` | empty | Comma-separated exact or `*.` hostname allowlist |
+| `SCOPEGUARD_ALLOWED_NETWORKS` | empty | Comma-separated IP/CIDR allowlist |
+| `SCOPEGUARD_MAX_PORTS` | `32` | Unique TCP ports per call; hard ceiling is 128 |
+| `SCOPEGUARD_NETWORK_TIMEOUT_SECONDS` | `3` | Per-connection timeout; range is 0.1–10 seconds |
 
-The MCP server intentionally exposes only stdio. A future network transport must ship
+The MCP server itself intentionally exposes only stdio. A future server transport must ship
 with standards-based authentication, request-size limits, and explicit deployment
 guidance; binding an unauthenticated security service to a port is not accepted here.
+
+## Safety boundary
+
+ScopeGuard supports authorized posture testing, not unrestricted offensive automation.
+It does not provide arbitrary requests or commands, password attacks, credential capture,
+exploit or payload generation, persistence, evasion, denial of service, CIDR-wide scans,
+or autonomous attack chains. These exclusions are trust boundaries, not missing tools.
 
 ## Repository analyzer
 

@@ -22,10 +22,14 @@ async def test_mcp_v2_discovers_and_calls_structured_tools(tmp_path, monkeypatch
                 "health",
                 "create_dry_run_engagement",
                 "scan_repository",
+                "probe_http",
+                "inspect_tls",
+                "probe_tcp_ports",
                 "verify_audit_chain",
             }.issubset(names)
             health = await client.call_tool("health", {})
             assert health.structured_content["ok"] is True
             assert health.structured_content["execution_enabled"] is False
+            assert health.structured_content["network_enabled"] is False
     finally:
         server.get_service.cache_clear()

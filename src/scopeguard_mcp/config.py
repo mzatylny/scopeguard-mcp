@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,41 @@ def _parse_positive_int(value: str, name: str) -> int:
     return parsed
 
 
+def _parse_bounded_int(value: str, name: str, *, maximum: int) -> int:
+    parsed = _parse_positive_int(value, name)
+    if parsed > maximum:
+        raise ConfigurationError(f"{name} must not exceed {maximum}")
+    return parsed
+
+
+def _parse_timeout(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise ConfigurationError("SCOPEGUARD_NETWORK_TIMEOUT_SECONDS must be a number") from exc
+    if not 0.1 <= parsed <= 10:
+        raise ConfigurationError("SCOPEGUARD_NETWORK_TIMEOUT_SECONDS must be between 0.1 and 10")
+    return parsed
+
+
+def _parse_csv(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    return tuple(item.strip() for item in value.split(",") if item.strip())
+
+
+def _parse_networks(value: str | None) -> tuple[str, ...]:
+    networks: list[str] = []
+    for item in _parse_csv(value):
+        try:
+            networks.append(str(ipaddress.ip_network(item, strict=False)))
+        except ValueError as exc:
+            raise ConfigurationError(
+                f"SCOPEGUARD_ALLOWED_NETWORKS contains an invalid CIDR: {item}"
+            ) from exc
+    return tuple(networks)
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     """Runtime settings that cannot be changed through MCP tools."""
@@ -39,6 +75,11 @@ class Settings:
     execution_enabled: bool = False
     max_files: int = 5_000
     max_file_bytes: int = 1_000_000
+    network_enabled: bool = False
+    allowed_hosts: tuple[str, ...] = ()
+    allowed_networks: tuple[str, ...] = ()
+    max_ports: int = 32
+    network_timeout_seconds: float = 3.0
 
     @classmethod
     def from_env(cls, project_root: Path | None = None) -> Settings:
@@ -71,6 +112,20 @@ class Settings:
             max_file_bytes=_parse_positive_int(
                 os.getenv("SCOPEGUARD_MAX_FILE_BYTES", "1000000"),
                 "SCOPEGUARD_MAX_FILE_BYTES",
+            ),
+            network_enabled=_parse_bool(
+                os.getenv("SCOPEGUARD_NETWORK_ENABLED", "false"),
+                "SCOPEGUARD_NETWORK_ENABLED",
+            ),
+            allowed_hosts=_parse_csv(os.getenv("SCOPEGUARD_ALLOWED_HOSTS")),
+            allowed_networks=_parse_networks(os.getenv("SCOPEGUARD_ALLOWED_NETWORKS")),
+            max_ports=_parse_bounded_int(
+                os.getenv("SCOPEGUARD_MAX_PORTS", "32"),
+                "SCOPEGUARD_MAX_PORTS",
+                maximum=128,
+            ),
+            network_timeout_seconds=_parse_timeout(
+                os.getenv("SCOPEGUARD_NETWORK_TIMEOUT_SECONDS", "3")
             ),
         )
 

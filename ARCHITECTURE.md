@@ -8,12 +8,16 @@ flowchart LR
     C --> D["Scope normalizer"]
     C --> E["Capability and expiry checks"]
     C --> F["Dual execution gate"]
+    C --> K["Network execution gate"]
+    K --> L["Host plus CIDR allowlists"]
     D --> G["Offline header analyzer"]
     F --> H["Read-only repository analyzer"]
+    L --> M["Bounded HTTP, TLS, and TCP probes"]
     C --> I[("SQLite engagements")]
     C --> J[("Hash-chained audit events")]
     G --> J
     H --> J
+    M --> J
 ```
 
 ## Trust boundaries
@@ -26,8 +30,11 @@ flowchart LR
    capability, and deterministic target-scope membership.
 4. Repository paths must also be under an operator-configured allowed root. Paths and
    symlinks are resolved before the check.
-5. The server does not expose an arbitrary command, shell, Python execution, network
-   request, exploit, credential, or payload tool.
+5. Network probes require the execute gate, a separate network gate, exact or wildcard
+   hostname approval, and approval for every resolved IP address. Connections use the
+   approved address directly to reduce DNS-rebinding risk.
+6. The server does not expose an arbitrary command, shell, Python execution, arbitrary
+   request, exploit, credential, password-attack, or payload tool.
 
 ## Data flow
 
@@ -37,7 +44,8 @@ flowchart LR
    traversal; canonicalizes domains, IPs, CIDRs, and local paths; then compares scope.
 4. Authorization success or failure is appended to the global audit chain.
 5. Offline analysis runs only after authorization. Repository analysis additionally
-   checks both execution gates and operator roots.
+   checks both execution gates and operator roots. Network probes additionally check the
+   network gate and both operator allowlists.
 6. Results return structured data. Secret matches are replaced by one-way fingerprints.
 7. The audit chain can be recomputed from genesis to detect modified or reordered rows.
 

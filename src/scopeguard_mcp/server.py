@@ -24,8 +24,9 @@ mcp = MCPServer(
         "Use only for systems and repositories the operator is authorized to assess. "
         "Every target operation requires an unexpired engagement and explicit capability. "
         "MCP clients can create dry-run engagements only; execute engagements must be "
-        "created by an operator through the local CLI. No arbitrary shell or network "
-        "execution is exposed."
+        "created by an operator through the local CLI. Bounded network probes additionally "
+        "require operator host and CIDR allowlists. No arbitrary shell, exploit, credential, "
+        "password-attack, or payload execution is exposed."
     ),
 )
 
@@ -135,6 +136,39 @@ def analyze_headers(engagement_id: str, target: str, headers: dict[str, str]) ->
 def scan_repository(engagement_id: str, path: str) -> dict[str, Any]:
     """Run built-in read-only Python and secret checks under operator-allowed roots."""
     return _safe_call(lambda: get_service().scan_repository(engagement_id, path))
+
+
+@mcp.tool(
+    title="Probe authorized HTTP endpoint",
+    annotations=ToolAnnotations(
+        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True
+    ),
+)
+def probe_http(engagement_id: str, target: str) -> dict[str, Any]:
+    """Send one allowlisted HEAD request, without a body, credentials, or redirects."""
+    return _safe_call(lambda: get_service().probe_http(engagement_id, target))
+
+
+@mcp.tool(
+    title="Inspect authorized TLS endpoint",
+    annotations=ToolAnnotations(
+        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True
+    ),
+)
+def inspect_tls(engagement_id: str, target: str, port: int | None = None) -> dict[str, Any]:
+    """Validate one allowlisted TLS handshake and return bounded certificate metadata."""
+    return _safe_call(lambda: get_service().inspect_tls(engagement_id, target, port))
+
+
+@mcp.tool(
+    title="Probe authorized TCP ports",
+    annotations=ToolAnnotations(
+        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True
+    ),
+)
+def probe_tcp_ports(engagement_id: str, target: str, ports: list[int]) -> dict[str, Any]:
+    """Try bounded TCP connects to one allowlisted host without banner collection."""
+    return _safe_call(lambda: get_service().probe_tcp_ports(engagement_id, target, ports))
 
 
 @mcp.tool(

@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "scopeguard-mcp"
-version = "0.1.0"
-description = "Policy-first defensive security operations server for MCP"
+version = "0.2.0"
+description = "Policy-first defensive security and bounded posture testing for MCP"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "ScopeGuard contributors" }]
-keywords = ["mcp", "security", "defensive-security", "sast", "audit"]
+keywords = ["mcp", "security", "defensive-security", "sast", "audit", "tls"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "License :: OSI Approved :: MIT License",

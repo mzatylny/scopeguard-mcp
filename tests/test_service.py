@@ -2,12 +2,20 @@ from dataclasses import replace
 
 import pytest
 
+from scopeguard_mcp import service as service_module
+from scopeguard_mcp.analyzers.network import ResolvedEndpoint
 from scopeguard_mcp.config import Settings
 from scopeguard_mcp.errors import AuthorizationError
 from scopeguard_mcp.service import ScopeGuardService
 
 
-def _settings(tmp_path, *, execution_enabled=False, allowed_roots=None):
+def _settings(
+    tmp_path,
+    *,
+    execution_enabled=False,
+    network_enabled=False,
+    allowed_roots=None,
+):
     state = tmp_path / "state"
     return Settings(
         project_root=tmp_path,
@@ -17,6 +25,11 @@ def _settings(tmp_path, *, execution_enabled=False, allowed_roots=None):
         execution_enabled=execution_enabled,
         max_files=100,
         max_file_bytes=100_000,
+        network_enabled=network_enabled,
+        allowed_hosts=("example.com",),
+        allowed_networks=("192.0.2.0/24",),
+        max_ports=4,
+        network_timeout_seconds=1,
     )
 
 
@@ -109,3 +122,102 @@ def test_audit_access_requires_capability_and_revoke_blocks_operations(tmp_path)
     assert service.revoke_engagement(engagement["id"])["status"] == "revoked"
     with pytest.raises(AuthorizationError, match="revoked"):
         service.plan_assessment(engagement["id"], "example.com")
+
+
+def test_network_probe_dry_run_and_dual_operator_gates(tmp_path):
+    dry_service = ScopeGuardService(_settings(tmp_path))
+    dry = _create(dry_service, "https://example.com/", ["probe:http"])
+    assert dry_service.probe_http(dry["id"], "https://example.com/")["status"] == "planned"
+
+    execution_off = ScopeGuardService(_settings(tmp_path, network_enabled=True))
+    engagement = _create(execution_off, "https://example.com/", ["probe:http"], mode="execute")
+    with pytest.raises(AuthorizationError, match="execution"):
+        execution_off.probe_http(engagement["id"], "https://example.com/")
+
+    network_off = ScopeGuardService(_settings(tmp_path, execution_enabled=True))
+    engagement = _create(network_off, "https://example.com/", ["probe:http"], mode="execute")
+    with pytest.raises(AuthorizationError, match="network probes"):
+        network_off.probe_http(engagement["id"], "https://example.com/")
+
+
+def test_bounded_network_probes_complete_and_audit(tmp_path, monkeypatch):
+    service = ScopeGuardService(_settings(tmp_path, execution_enabled=True, network_enabled=True))
+    endpoint = ResolvedEndpoint("example.com", 443, ("192.0.2.10",), "192.0.2.10")
+    monkeypatch.setattr(
+        service_module, "resolve_allowed_endpoint", lambda *args, **kwargs: endpoint
+    )
+    monkeypatch.setattr(
+        service_module,
+        "probe_http_head",
+        lambda *args, **kwargs: {"status": 200, "headers": {}},
+    )
+    monkeypatch.setattr(
+        service_module,
+        "inspect_tls_endpoint",
+        lambda *args, **kwargs: {"protocol": "TLSv1.3", "valid": True},
+    )
+    monkeypatch.setattr(
+        service_module,
+        "probe_tcp_ports",
+        lambda *args, **kwargs: {"summary": {"requested": 2, "open": 1}},
+    )
+
+    http = _create(service, "https://example.com/", ["probe:http", "audit:read"], mode="execute")
+    assert service.probe_http(http["id"], "https://example.com/")["status"] == "completed"
+
+    tls = _create(service, "example.com", ["inspect:tls"], mode="execute")
+    assert service.inspect_tls(tls["id"], "example.com")["inspection"]["valid"] is True
+
+    tcp = _create(service, "example.com", ["probe:tcp-ports"], mode="execute")
+    result = service.probe_tcp_ports(tcp["id"], "example.com", [80, 443])
+    assert result["probe"]["summary"]["open"] == 1
+    assert service.list_audit(http["id"])["events"]
+
+
+def test_tcp_probe_validates_target_and_ports_before_resolution(tmp_path, monkeypatch):
+    service = ScopeGuardService(_settings(tmp_path, execution_enabled=True, network_enabled=True))
+    monkeypatch.setattr(
+        service_module,
+        "resolve_allowed_endpoint",
+        lambda *args, **kwargs: pytest.fail("invalid input reached endpoint resolution"),
+    )
+    url = _create(service, "https://example.com/", ["probe:tcp-ports"], mode="execute")
+    with pytest.raises(ValueError, match="domain or single IP"):
+        service.probe_tcp_ports(url["id"], "https://example.com/", [443])
+
+    domain = _create(service, "example.com", ["probe:tcp-ports"], mode="execute")
+    with pytest.raises(ValueError, match="at least one"):
+        service.probe_tcp_ports(domain["id"], "example.com", [])
+    with pytest.raises(ValueError, match="integers"):
+        service.probe_tcp_ports(domain["id"], "example.com", [True])
+    with pytest.raises(ValueError, match="limited"):
+        service.probe_tcp_ports(domain["id"], "example.com", [1, 2, 3, 4, 5])
+    with pytest.raises(ValueError, match="between"):
+        service.probe_tcp_ports(domain["id"], "example.com", [0])
+
+
+def test_network_probe_enforces_operator_hostname_allowlist_and_audits(tmp_path):
+    service = ScopeGuardService(_settings(tmp_path, execution_enabled=True, network_enabled=True))
+    engagement = _create(service, "outside.example", ["probe:http", "audit:read"], mode="execute")
+    with pytest.raises(AuthorizationError, match="ALLOWED_HOSTS"):
+        service.probe_http(engagement["id"], "https://outside.example/")
+    events = service.list_audit(engagement["id"])["events"]
+    assert any(event["action"] == "http.probe" and event["outcome"] == "denied" for event in events)
+
+
+def test_tls_probe_validates_port_before_resolution(tmp_path, monkeypatch):
+    service = ScopeGuardService(_settings(tmp_path, execution_enabled=True, network_enabled=True))
+    monkeypatch.setattr(
+        service_module,
+        "resolve_allowed_endpoint",
+        lambda *args, **kwargs: pytest.fail("invalid input reached endpoint resolution"),
+    )
+    engagement = _create(service, "example.com", ["inspect:tls"], mode="execute")
+    with pytest.raises(ValueError, match="integer"):
+        service.inspect_tls(engagement["id"], "example.com", True)
+    with pytest.raises(ValueError, match="between"):
+        service.inspect_tls(engagement["id"], "example.com", 0)
+
+    url = _create(service, "https://example.com:8443/", ["inspect:tls"], mode="execute")
+    with pytest.raises(ValueError, match="conflicts"):
+        service.inspect_tls(url["id"], "https://example.com:8443/", 443)
