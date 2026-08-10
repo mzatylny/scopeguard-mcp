@@ -1,0 +1,67 @@
+from types import SimpleNamespace
+
+from scopeguard_mcp import server
+from scopeguard_mcp.errors import AuthorizationError
+
+
+class FakeService:
+    def health(self):
+        return {"ok": True, "fake": True}
+
+    def create_engagement(self, **kwargs):
+        return kwargs
+
+    def revoke_engagement(self, engagement_id):
+        return {"id": engagement_id, "status": "revoked"}
+
+    def check_scope(self, engagement_id, target):
+        return {"id": engagement_id, "target": target}
+
+    def plan_assessment(self, engagement_id, target, profile):
+        return {"id": engagement_id, "target": target, "profile": profile}
+
+    def analyze_headers(self, engagement_id, target, headers):
+        return {"id": engagement_id, "target": target, "headers": headers}
+
+    def scan_repository(self, engagement_id, path):
+        return {"id": engagement_id, "path": path}
+
+    def list_audit(self, engagement_id, limit):
+        return {"id": engagement_id, "limit": limit}
+
+    def verify_audit(self):
+        return {"ok": True, "valid": True}
+
+
+def test_server_tools_delegate_and_force_dry_run(monkeypatch):
+    fake = FakeService()
+    monkeypatch.setattr(server, "get_service", lambda: fake)
+    assert server.health()["fake"] is True
+    created = server.create_dry_run_engagement(
+        "Title", "SEC-1", ["example.com"], ["plan:assessment"], 30
+    )
+    assert created["mode"] == "dry-run"
+    assert server.revoke_engagement("eng")["status"] == "revoked"
+    assert server.check_scope("eng", "example.com")["target"] == "example.com"
+    assert server.plan_assessment("eng", "example.com", "web")["profile"] == "web"
+    assert server.analyze_headers("eng", "https://example.com", {"x": "y"})["headers"]
+    assert server.scan_repository("eng", ".")["path"] == "."
+    assert server.list_audit_events("eng", 5)["limit"] == 5
+    assert server.verify_audit_chain()["valid"] is True
+
+
+def test_server_returns_structured_expected_errors():
+    result = server._safe_call(lambda: (_ for _ in ()).throw(AuthorizationError("denied")))
+    assert result == {
+        "ok": False,
+        "error": {"type": "AuthorizationError", "message": "denied"},
+    }
+
+
+def test_server_main_uses_stdio(monkeypatch):
+    called = SimpleNamespace(transport=None)
+    monkeypatch.setattr(
+        server.mcp, "run", lambda *, transport: setattr(called, "transport", transport)
+    )
+    server.main()
+    assert called.transport == "stdio"

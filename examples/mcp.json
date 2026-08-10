@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "scopeguard": {
+      "command": "/absolute/path/to/scopeguard-mcp/.venv/bin/scopeguard-mcp",
+      "env": {
+        "SCOPEGUARD_STATE_DIR": "/absolute/path/to/scopeguard-state"
+      }
+    }
+  }
+}
