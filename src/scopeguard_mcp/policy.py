@@ -6,16 +6,17 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from .errors import AuthorizationError
+from .errors import AuthorizationError, InvalidTargetError
 from .models import ALL_CAPABILITIES, Capability, Engagement, EngagementMode, NormalizedTarget
 from .scope import any_scope_matches, normalize_target
 from .storage import Store
 
 
 class PolicyEngine:
-    def __init__(self, store: Store, *, base_dir: Path):
+    def __init__(self, store: Store, *, base_dir: Path, max_targets: int = 25):
         self.store = store
         self.base_dir = base_dir
+        self.max_targets = max_targets
 
     def create_engagement(
         self,
@@ -27,19 +28,39 @@ class PolicyEngine:
         mode: str = EngagementMode.DRY_RUN.value,
         expires_in_minutes: int = 60,
     ) -> Engagement:
+        if not isinstance(title, str) or not isinstance(ticket, str):
+            raise ValueError("title and ticket must be strings")
+        if not isinstance(targets, list) or not all(isinstance(target, str) for target in targets):
+            raise ValueError("targets must be a list of strings")
+        if not isinstance(capabilities, list) or not all(
+            isinstance(capability, str) for capability in capabilities
+        ):
+            raise ValueError("capabilities must be a list of strings")
+        if isinstance(expires_in_minutes, bool) or not isinstance(expires_in_minutes, int):
+            raise ValueError("expires_in_minutes must be an integer")
         clean_title = title.strip()
         clean_ticket = ticket.strip()
         if not clean_title:
             raise ValueError("title must not be empty")
+        if len(clean_title) > 200:
+            raise ValueError("title must contain at most 200 characters")
         if not clean_ticket:
             raise ValueError("ticket must not be empty")
+        if len(clean_ticket) > 128:
+            raise ValueError("ticket must contain at most 128 characters")
         if not targets:
             raise ValueError("at least one target is required")
+        if len(targets) > self.max_targets:
+            raise ValueError(f"at most {self.max_targets} targets are allowed")
+        if any(len(target) > 2_048 for target in targets):
+            raise ValueError("targets must contain at most 2048 characters")
         if not 1 <= expires_in_minutes <= 24 * 60:
             raise ValueError("expires_in_minutes must be between 1 and 1440")
         normalized_targets = tuple(
             normalize_target(target, base_dir=self.base_dir).display for target in targets
         )
+        if len(set(normalized_targets)) != len(normalized_targets):
+            raise ValueError("duplicate normalized targets are not allowed")
         requested_capabilities = frozenset(Capability(value) for value in capabilities)
         if not requested_capabilities:
             raise ValueError("at least one capability is required")
@@ -71,6 +92,15 @@ class PolicyEngine:
         )
         return engagement
 
+    def require_active(self, engagement_id: str) -> Engagement:
+        """Load an engagement and enforce its lifecycle without authorizing a target."""
+        engagement = self.store.get_engagement(engagement_id)
+        if engagement.status != "active":
+            raise AuthorizationError("engagement is revoked")
+        if engagement.expired:
+            raise AuthorizationError("engagement has expired")
+        return engagement
+
     def authorize(
         self,
         *,
@@ -80,6 +110,8 @@ class PolicyEngine:
     ) -> tuple[Engagement, NormalizedTarget]:
         engagement = self.store.get_engagement(engagement_id)
         try:
+            if not isinstance(target, str) or len(target) > 2_048:
+                raise ValueError("target must be a string containing at most 2048 characters")
             if engagement.status != "active":
                 raise AuthorizationError("engagement is revoked")
             if engagement.expired:
@@ -93,12 +125,19 @@ class PolicyEngine:
                 raise AuthorizationError(
                     f"target is outside engagement scope: {normalized.display}"
                 )
-        except AuthorizationError as exc:
+        except (AuthorizationError, InvalidTargetError, ValueError) as exc:
             self.store.append_audit(
                 engagement_id=engagement_id,
                 action="authorization.check",
                 outcome="denied",
-                details={"capability": capability.value, "target": target, "reason": str(exc)},
+                details={
+                    "capability": capability.value,
+                    "reason_code": (
+                        "authorization_denied"
+                        if isinstance(exc, AuthorizationError)
+                        else "invalid_target"
+                    ),
+                },
             )
             raise
         self.store.append_audit(
@@ -113,7 +152,18 @@ class PolicyEngine:
         return engagement, normalized
 
     def scope_check(self, engagement_id: str, target: str) -> dict[str, object]:
-        engagement = self.store.get_engagement(engagement_id)
+        try:
+            engagement = self.require_active(engagement_id)
+        except AuthorizationError:
+            self.store.append_audit(
+                engagement_id=engagement_id,
+                action="scope.check",
+                outcome="denied",
+                details={"reason_code": "engagement_inactive"},
+            )
+            raise
+        if not isinstance(target, str) or len(target) > 2_048:
+            raise ValueError("target must be a string containing at most 2048 characters")
         in_scope, normalized = any_scope_matches(engagement.targets, target, base_dir=self.base_dir)
         self.store.append_audit(
             engagement_id=engagement_id,

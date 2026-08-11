@@ -89,8 +89,8 @@ def create_dry_run_engagement(
     ),
 )
 def revoke_engagement(engagement_id: str) -> dict[str, Any]:
-    """Immediately revoke an engagement and prevent further target operations."""
-    return _safe_call(lambda: get_service().revoke_engagement(engagement_id))
+    """Revoke an MCP-created dry-run engagement; execute grants are operator-only."""
+    return _safe_call(lambda: get_service().revoke_dry_run_engagement(engagement_id))
 
 
 @mcp.tool(
@@ -157,6 +157,17 @@ def list_audit_events(engagement_id: str, limit: int = 100) -> dict[str, Any]:
 def verify_audit_chain() -> dict[str, Any]:
     """Verify every persisted event against the tamper-evident hash chain."""
     return _safe_call(get_service().verify_audit)
+
+
+@mcp.tool(
+    title="Read repository scan evidence",
+    annotations=ToolAnnotations(
+        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+    ),
+)
+def list_scan_runs(engagement_id: str, limit: int = 100) -> dict[str, Any]:
+    """Return durable scan manifests and outcomes when audit:read is granted."""
+    return _safe_call(lambda: get_service().list_scan_runs(engagement_id, limit))
 
 
 def main() -> None:

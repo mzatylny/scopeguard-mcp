@@ -13,6 +13,9 @@ class FakeService:
     def verify_audit(self):
         return {"command": "verify"}
 
+    def export_audit_checkpoint(self):
+        return {"command": "export", "sealed": True}
+
     def create_engagement(self, **kwargs):
         return {"command": "create", **kwargs}
 
@@ -31,6 +34,8 @@ def test_cli_doctor_and_verify(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["command"] == "doctor"
     cli.main(["verify-audit"])
     assert json.loads(capsys.readouterr().out)["command"] == "verify"
+    cli.main(["export-audit-checkpoint"])
+    assert json.loads(capsys.readouterr().out)["command"] == "export"
 
 
 def test_cli_create_and_revoke(monkeypatch, capsys):

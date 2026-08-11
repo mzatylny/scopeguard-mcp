@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .errors import ConfigurationError
@@ -28,6 +29,25 @@ def _parse_positive_int(value: str, name: str) -> int:
     return parsed
 
 
+def _load_audit_key() -> tuple[bytes | None, str]:
+    raw_key = os.getenv("SCOPEGUARD_AUDIT_HMAC_KEY", "")
+    if not raw_key:
+        return None, "unsealed"
+    key = raw_key.encode("utf-8")
+    if len(key) < 32:
+        raise ConfigurationError("SCOPEGUARD_AUDIT_HMAC_KEY must contain at least 32 bytes")
+    configured_id = os.getenv("SCOPEGUARD_AUDIT_KEY_ID", "").strip()
+    key_id = configured_id or hashlib.sha256(key).hexdigest()[:12]
+    if len(key_id) > 64 or any(
+        character not in "-_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        for character in key_id
+    ):
+        raise ConfigurationError(
+            "SCOPEGUARD_AUDIT_KEY_ID must use at most 64 letters, numbers, hyphens, or underscores"
+        )
+    return key, key_id
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     """Runtime settings that cannot be changed through MCP tools."""
@@ -39,6 +59,14 @@ class Settings:
     execution_enabled: bool = False
     max_files: int = 5_000
     max_file_bytes: int = 1_000_000
+    max_total_bytes: int = 50_000_000
+    max_findings: int = 2_000
+    max_targets: int = 25
+    max_headers: int = 100
+    max_header_bytes: int = 32_768
+    require_sealed_audit: bool = False
+    audit_hmac_key: bytes | None = field(default=None, repr=False)
+    audit_key_id: str = "unsealed"
 
     @classmethod
     def from_env(cls, project_root: Path | None = None) -> Settings:
@@ -56,15 +84,17 @@ class Settings:
             roots = (root,)
         if not roots:
             raise ConfigurationError("SCOPEGUARD_ALLOWED_ROOTS must contain at least one path")
+        execution_enabled = _parse_bool(
+            os.getenv("SCOPEGUARD_EXECUTION_ENABLED", "false"),
+            "SCOPEGUARD_EXECUTION_ENABLED",
+        )
+        audit_hmac_key, audit_key_id = _load_audit_key()
         return cls(
             project_root=root,
             state_dir=state_dir,
             database_path=state_dir / "scopeguard.db",
             allowed_roots=roots,
-            execution_enabled=_parse_bool(
-                os.getenv("SCOPEGUARD_EXECUTION_ENABLED", "false"),
-                "SCOPEGUARD_EXECUTION_ENABLED",
-            ),
+            execution_enabled=execution_enabled,
             max_files=_parse_positive_int(
                 os.getenv("SCOPEGUARD_MAX_FILES", "5000"), "SCOPEGUARD_MAX_FILES"
             ),
@@ -72,6 +102,33 @@ class Settings:
                 os.getenv("SCOPEGUARD_MAX_FILE_BYTES", "1000000"),
                 "SCOPEGUARD_MAX_FILE_BYTES",
             ),
+            max_total_bytes=_parse_positive_int(
+                os.getenv("SCOPEGUARD_MAX_TOTAL_BYTES", "50000000"),
+                "SCOPEGUARD_MAX_TOTAL_BYTES",
+            ),
+            max_findings=_parse_positive_int(
+                os.getenv("SCOPEGUARD_MAX_FINDINGS", "2000"),
+                "SCOPEGUARD_MAX_FINDINGS",
+            ),
+            max_targets=_parse_positive_int(
+                os.getenv("SCOPEGUARD_MAX_TARGETS", "25"), "SCOPEGUARD_MAX_TARGETS"
+            ),
+            max_headers=_parse_positive_int(
+                os.getenv("SCOPEGUARD_MAX_HEADERS", "100"), "SCOPEGUARD_MAX_HEADERS"
+            ),
+            max_header_bytes=_parse_positive_int(
+                os.getenv("SCOPEGUARD_MAX_HEADER_BYTES", "32768"),
+                "SCOPEGUARD_MAX_HEADER_BYTES",
+            ),
+            require_sealed_audit=_parse_bool(
+                os.getenv(
+                    "SCOPEGUARD_REQUIRE_SEALED_AUDIT",
+                    "true" if execution_enabled else "false",
+                ),
+                "SCOPEGUARD_REQUIRE_SEALED_AUDIT",
+            ),
+            audit_hmac_key=audit_hmac_key,
+            audit_key_id=audit_key_id,
         )
 
     def ensure_state_dir(self) -> None:

@@ -11,7 +11,7 @@ class FakeService:
     def create_engagement(self, **kwargs):
         return kwargs
 
-    def revoke_engagement(self, engagement_id):
+    def revoke_dry_run_engagement(self, engagement_id):
         return {"id": engagement_id, "status": "revoked"}
 
     def check_scope(self, engagement_id, target):
@@ -32,6 +32,9 @@ class FakeService:
     def verify_audit(self):
         return {"ok": True, "valid": True}
 
+    def list_scan_runs(self, engagement_id, limit):
+        return {"id": engagement_id, "limit": limit}
+
 
 def test_server_tools_delegate_and_force_dry_run(monkeypatch):
     fake = FakeService()
@@ -48,6 +51,7 @@ def test_server_tools_delegate_and_force_dry_run(monkeypatch):
     assert server.scan_repository("eng", ".")["path"] == "."
     assert server.list_audit_events("eng", 5)["limit"] == 5
     assert server.verify_audit_chain()["valid"] is True
+    assert server.list_scan_runs("eng", 3)["limit"] == 3
 
 
 def test_server_returns_structured_expected_errors():

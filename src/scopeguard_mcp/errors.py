@@ -19,3 +19,7 @@ class EngagementNotFoundError(ScopeGuardError):
 
 class AuthorizationError(ScopeGuardError):
     """Raised when an engagement does not authorize an operation."""
+
+
+class AnalysisError(ScopeGuardError):
+    """Raised when a bounded analyzer cannot complete safely."""
