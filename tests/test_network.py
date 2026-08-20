@@ -120,8 +120,7 @@ def test_http_probe_sends_head_and_does_not_follow_redirect(monkeypatch):
     assert result["status"] == 302
     assert result["redirect_followed"] is False
     assert result["headers"]["location"] == "https://elsewhere.example/next"
-    assert "do-not-return" not in result["headers"]["set-cookie"]
-    assert "Secure" in result["headers"]["set-cookie"]
+    assert result["headers"]["set-cookie"] == "[redacted]; Secure; HttpOnly; SameSite=Lax"
     assert fake_socket.closed is True
 
 
@@ -135,6 +134,12 @@ def test_sensitive_response_headers_are_redacted():
     assert network._redact_header("authorization", "Bearer secret") == "[redacted]"
     assert network._redact_header("x-api-key", "secret") == "[redacted]"
     assert network._redact_header("x-session-token", "secret") == "[redacted]"
+    cookie = network._redact_header(
+        "set-cookie",
+        "id=secret; Secure; HttpOnly; SameSite=Strict; Extension-Value=also-secret",
+    )
+    assert cookie == "[redacted]; Secure; HttpOnly; SameSite=Strict"
+    assert "also-secret" not in cookie
     assert network._redact_header("server", "scopeguard-test") == "scopeguard-test"
 
 

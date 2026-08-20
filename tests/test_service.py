@@ -140,6 +140,20 @@ def test_network_probe_dry_run_and_dual_operator_gates(tmp_path):
         network_off.probe_http(engagement["id"], "https://example.com/")
 
 
+def test_http_dry_run_rejects_non_url_and_audits(tmp_path):
+    service = ScopeGuardService(_settings(tmp_path))
+    engagement = _create(
+        service,
+        "example.com",
+        ["probe:http", "audit:read"],
+        mode="dry-run",
+    )
+    with pytest.raises(ValueError, match="URL target"):
+        service.probe_http(engagement["id"], "example.com")
+    events = service.list_audit(engagement["id"])["events"]
+    assert any(event["action"] == "http.probe" and event["outcome"] == "denied" for event in events)
+
+
 def test_bounded_network_probes_complete_and_audit(tmp_path, monkeypatch):
     service = ScopeGuardService(_settings(tmp_path, execution_enabled=True, network_enabled=True))
     endpoint = ResolvedEndpoint("example.com", 443, ("192.0.2.10",), "192.0.2.10")
@@ -181,19 +195,29 @@ def test_tcp_probe_validates_target_and_ports_before_resolution(tmp_path, monkey
         "resolve_allowed_endpoint",
         lambda *args, **kwargs: pytest.fail("invalid input reached endpoint resolution"),
     )
-    url = _create(service, "https://example.com/", ["probe:tcp-ports"], mode="execute")
-    with pytest.raises(ValueError, match="domain or single IP"):
-        service.probe_tcp_ports(url["id"], "https://example.com/", [443])
+    for mode in ("dry-run", "execute"):
+        url = _create(service, "https://example.com/", ["probe:tcp-ports"], mode=mode)
+        with pytest.raises(ValueError, match="domain or single IP"):
+            service.probe_tcp_ports(url["id"], "https://example.com/", [443])
 
-    domain = _create(service, "example.com", ["probe:tcp-ports"], mode="execute")
-    with pytest.raises(ValueError, match="at least one"):
-        service.probe_tcp_ports(domain["id"], "example.com", [])
-    with pytest.raises(ValueError, match="integers"):
-        service.probe_tcp_ports(domain["id"], "example.com", [True])
-    with pytest.raises(ValueError, match="limited"):
-        service.probe_tcp_ports(domain["id"], "example.com", [1, 2, 3, 4, 5])
-    with pytest.raises(ValueError, match="between"):
-        service.probe_tcp_ports(domain["id"], "example.com", [0])
+        domain = _create(
+            service,
+            "example.com",
+            ["probe:tcp-ports", "audit:read"],
+            mode=mode,
+        )
+        with pytest.raises(ValueError, match="at least one"):
+            service.probe_tcp_ports(domain["id"], "example.com", [])
+        with pytest.raises(ValueError, match="integers"):
+            service.probe_tcp_ports(domain["id"], "example.com", [True])
+        with pytest.raises(ValueError, match="limited"):
+            service.probe_tcp_ports(domain["id"], "example.com", [1, 2, 3, 4, 5])
+        with pytest.raises(ValueError, match="between"):
+            service.probe_tcp_ports(domain["id"], "example.com", [0])
+        events = service.list_audit(domain["id"])["events"]
+        assert any(
+            event["action"] == "tcp.probe" and event["outcome"] == "denied" for event in events
+        )
 
 
 def test_network_probe_enforces_operator_hostname_allowlist_and_audits(tmp_path):
@@ -212,11 +236,12 @@ def test_tls_probe_validates_port_before_resolution(tmp_path, monkeypatch):
         "resolve_allowed_endpoint",
         lambda *args, **kwargs: pytest.fail("invalid input reached endpoint resolution"),
     )
-    engagement = _create(service, "example.com", ["inspect:tls"], mode="execute")
-    with pytest.raises(ValueError, match="integer"):
-        service.inspect_tls(engagement["id"], "example.com", True)
-    with pytest.raises(ValueError, match="between"):
-        service.inspect_tls(engagement["id"], "example.com", 0)
+    for mode in ("dry-run", "execute"):
+        engagement = _create(service, "example.com", ["inspect:tls"], mode=mode)
+        with pytest.raises(ValueError, match="integer"):
+            service.inspect_tls(engagement["id"], "example.com", True)
+        with pytest.raises(ValueError, match="between"):
+            service.inspect_tls(engagement["id"], "example.com", 0)
 
     url = _create(service, "https://example.com:8443/", ["inspect:tls"], mode="execute")
     with pytest.raises(ValueError, match="conflicts"):
@@ -268,26 +293,37 @@ def test_posture_assessment_executes_only_fixed_preflighted_steps(tmp_path, monk
     service = ScopeGuardService(_settings(tmp_path, execution_enabled=True, network_enabled=True))
     engagement = _create_workflow_engagement(service, mode="execute")
     calls = []
+    resolutions = []
+    endpoint = ResolvedEndpoint("example.com", 443, ("192.0.2.10",), "192.0.2.10")
+
+    def resolve(*args, **kwargs):
+        resolutions.append((args, kwargs))
+        return endpoint
 
     def tcp(*args):
+        assert args[-1].selected_address == endpoint.selected_address
         calls.append("tcp")
         return {"status": "completed"}
 
     def tls(*args):
+        assert args[-1].selected_address == endpoint.selected_address
         calls.append("tls")
         return {"status": "completed"}
 
     def http(*args):
+        assert args[-1].selected_address == endpoint.selected_address
         calls.append("http")
         return {"status": "completed"}
 
-    monkeypatch.setattr(service, "probe_tcp_ports", tcp)
-    monkeypatch.setattr(service, "inspect_tls", tls)
-    monkeypatch.setattr(service, "probe_http", http)
+    monkeypatch.setattr(service_module, "resolve_allowed_endpoint", resolve)
+    monkeypatch.setattr(service, "_execute_tcp_probe", tcp)
+    monkeypatch.setattr(service, "_execute_tls_probe", tls)
+    monkeypatch.setattr(service, "_execute_http_probe", http)
     result = service.run_posture_assessment(
         engagement["id"], "https://example.com/", "example.com", [80, 443]
     )
     assert calls == ["tcp", "tls", "http"]
+    assert len(resolutions) == 1
     assert result["completed_steps"] == [
         "probe_tcp_ports",
         "inspect_tls",
@@ -296,18 +332,46 @@ def test_posture_assessment_executes_only_fixed_preflighted_steps(tmp_path, monk
     assert result["workflow"] == "fixed-sequence"
 
 
+def test_posture_assessment_resolves_allowlist_before_any_probe(tmp_path, monkeypatch):
+    service = ScopeGuardService(_settings(tmp_path, execution_enabled=True, network_enabled=True))
+    engagement = _create_workflow_engagement(service, mode="execute")
+    calls = []
+
+    def deny_resolution(*args, **kwargs):
+        raise AuthorizationError("resolved address is outside SCOPEGUARD_ALLOWED_NETWORKS")
+
+    monkeypatch.setattr(service_module, "resolve_allowed_endpoint", deny_resolution)
+    monkeypatch.setattr(service, "_execute_tcp_probe", lambda *args: calls.append("tcp"))
+    monkeypatch.setattr(service, "_execute_tls_probe", lambda *args: calls.append("tls"))
+    monkeypatch.setattr(service, "_execute_http_probe", lambda *args: calls.append("http"))
+
+    with pytest.raises(AuthorizationError, match="ALLOWED_NETWORKS"):
+        service.run_posture_assessment(
+            engagement["id"], "https://example.com/", "example.com", [443]
+        )
+    assert calls == []
+    events = service.list_audit(engagement["id"])["events"]
+    assert any(
+        event["action"] == "posture.run" and event["outcome"] == "denied" for event in events
+    )
+
+
 def test_posture_assessment_stops_on_first_error_and_audits(tmp_path, monkeypatch):
     service = ScopeGuardService(_settings(tmp_path, execution_enabled=True, network_enabled=True))
     engagement = _create_workflow_engagement(service, mode="execute")
-    monkeypatch.setattr(service, "probe_tcp_ports", lambda *args: {"status": "completed"})
+    endpoint = ResolvedEndpoint("example.com", 443, ("192.0.2.10",), "192.0.2.10")
+    monkeypatch.setattr(
+        service_module, "resolve_allowed_endpoint", lambda *args, **kwargs: endpoint
+    )
+    monkeypatch.setattr(service, "_execute_tcp_probe", lambda *args: {"status": "completed"})
 
     def fail_tls(*args):
         raise NetworkProbeError("TLS validation failed")
 
-    monkeypatch.setattr(service, "inspect_tls", fail_tls)
+    monkeypatch.setattr(service, "_execute_tls_probe", fail_tls)
     monkeypatch.setattr(
         service,
-        "probe_http",
+        "_execute_http_probe",
         lambda *args: pytest.fail("workflow continued after an error"),
     )
     with pytest.raises(NetworkProbeError, match="TLS validation"):

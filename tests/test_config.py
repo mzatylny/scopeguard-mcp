@@ -42,7 +42,7 @@ def test_settings_read_explicit_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("SCOPEGUARD_MAX_FILES", "12")
     monkeypatch.setenv("SCOPEGUARD_MAX_FILE_BYTES", "345")
     monkeypatch.setenv("SCOPEGUARD_NETWORK_ENABLED", "on")
-    monkeypatch.setenv("SCOPEGUARD_ALLOWED_HOSTS", "example.com, *.example.net")
+    monkeypatch.setenv("SCOPEGUARD_ALLOWED_HOSTS", "EXAMPLE.com., *.example.net,example.com")
     monkeypatch.setenv("SCOPEGUARD_ALLOWED_NETWORKS", "192.0.2.4/24,2001:db8::/32")
     monkeypatch.setenv("SCOPEGUARD_MAX_PORTS", "12")
     monkeypatch.setenv("SCOPEGUARD_NETWORK_TIMEOUT_SECONDS", "1.5")
@@ -66,6 +66,9 @@ def test_settings_read_explicit_environment(tmp_path, monkeypatch):
         ("SCOPEGUARD_MAX_FILES", "many"),
         ("SCOPEGUARD_MAX_FILE_BYTES", "-1"),
         ("SCOPEGUARD_NETWORK_ENABLED", "perhaps"),
+        ("SCOPEGUARD_ALLOWED_HOSTS", "bad_host.example"),
+        ("SCOPEGUARD_ALLOWED_HOSTS", "foo.*.example"),
+        ("SCOPEGUARD_ALLOWED_HOSTS", "192.0.2.10"),
         ("SCOPEGUARD_ALLOWED_NETWORKS", "not-a-cidr"),
         ("SCOPEGUARD_MAX_PORTS", "129"),
         ("SCOPEGUARD_NETWORK_TIMEOUT_SECONDS", "0"),

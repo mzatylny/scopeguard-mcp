@@ -141,15 +141,18 @@ scopeguard-mcp
 
 The HTTP tool sends only `HEAD`, does not accept credentials or a request body, pins the
 connection to a pre-authorized DNS answer, and never follows redirects. Sensitive
-response headers are redacted. The TCP tool accepts at most 32 unique ports by default,
-uses connect-only checks, and never sends application data or captures banners.
+response headers are redacted; cookie output retains only the `Secure`, `HttpOnly`, and
+validated `SameSite` attributes needed for hardening analysis. The TCP tool accepts at
+most 32 unique ports by default, uses connect-only checks, and never sends application
+data or captures banners.
 
 ### Guarded autonomous workflow
 
 `run_posture_assessment` automates only a predeclared posture sequence. Before the first
 connection it validates the workflow capability, every underlying probe capability, both
 the URL and host scopes, target-host equality, the port limit, the execute gate, and the
-network gate. HTTPS runs TCP → TLS → HTTP; HTTP runs TCP → HTTP. The workflow stops at the
+network gate. It resolves and authorizes the host once, then reuses that pinned address for
+every step. HTTPS runs TCP → TLS → HTTP; HTTP runs TCP → HTTP. The workflow stops at the
 first error and records completed steps in the audit chain.
 
 It does not choose new tools or targets from results, exploit findings, submit payloads,

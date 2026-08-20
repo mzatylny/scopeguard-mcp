@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from .errors import ConfigurationError
+
+_HOST_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$", re.IGNORECASE)
 
 
 def _parse_bool(value: str, name: str) -> bool:
@@ -50,6 +53,43 @@ def _parse_csv(value: str | None) -> tuple[str, ...]:
     if not value:
         return ()
     return tuple(item.strip() for item in value.split(",") if item.strip())
+
+
+def _parse_hosts(value: str | None) -> tuple[str, ...]:
+    hosts: list[str] = []
+    for item in _parse_csv(value):
+        wildcard = item.startswith("*.")
+        candidate = item[2:] if wildcard else item
+        if "*" in candidate:
+            raise ConfigurationError(
+                f"SCOPEGUARD_ALLOWED_HOSTS contains an invalid wildcard: {item}"
+            )
+        try:
+            candidate = candidate.rstrip(".").encode("idna").decode("ascii").lower()
+        except UnicodeError as exc:
+            raise ConfigurationError(
+                f"SCOPEGUARD_ALLOWED_HOSTS contains an invalid hostname: {item}"
+            ) from exc
+        try:
+            ipaddress.ip_address(candidate)
+        except ValueError:
+            pass
+        else:
+            raise ConfigurationError(
+                "SCOPEGUARD_ALLOWED_HOSTS accepts hostnames only; "
+                "authorize direct IP targets with SCOPEGUARD_ALLOWED_NETWORKS"
+            )
+        labels = candidate.split(".")
+        if (
+            not candidate
+            or len(candidate) > 253
+            or any(not _HOST_LABEL_RE.fullmatch(label) for label in labels)
+        ):
+            raise ConfigurationError(
+                f"SCOPEGUARD_ALLOWED_HOSTS contains an invalid hostname: {item}"
+            )
+        hosts.append(("*." if wildcard else "") + candidate)
+    return tuple(dict.fromkeys(hosts))
 
 
 def _parse_networks(value: str | None) -> tuple[str, ...]:
@@ -117,7 +157,7 @@ class Settings:
                 os.getenv("SCOPEGUARD_NETWORK_ENABLED", "false"),
                 "SCOPEGUARD_NETWORK_ENABLED",
             ),
-            allowed_hosts=_parse_csv(os.getenv("SCOPEGUARD_ALLOWED_HOSTS")),
+            allowed_hosts=_parse_hosts(os.getenv("SCOPEGUARD_ALLOWED_HOSTS")),
             allowed_networks=_parse_networks(os.getenv("SCOPEGUARD_ALLOWED_NETWORKS")),
             max_ports=_parse_bounded_int(
                 os.getenv("SCOPEGUARD_MAX_PORTS", "32"),

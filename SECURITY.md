@@ -31,7 +31,8 @@ The primary controls are:
 - bounded file count and file size
 - hostname plus resolved-address network allowlists
 - fixed HTTP HEAD, TLS handshake, and connect-only TCP probes with strict limits
-- fixed-sequence posture orchestration with full preflight and fail-closed execution
+- fixed-sequence posture orchestration with full preflight, one pinned DNS result, and
+  fail-closed execution
 - offline education simulation restricted to dry-run mode and `training.invalid`
 - no arbitrary subprocess, shell, request, exploit, password, payload, or dynamic-code tool
 - redacted secret findings

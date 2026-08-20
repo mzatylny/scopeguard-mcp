@@ -141,8 +141,21 @@ def _redact_header(name: str, value: str) -> str:
         return value[:4096]
     if name not in {"set-cookie", "set-cookie2"}:
         return "[redacted]"
-    attributes = [part.strip() for part in value.split(";")[1:] if part.strip()]
-    return "; ".join(["[redacted]", *attributes])[:4096]
+    # Preserve only attributes needed by the offline hardening analysis. Cookie extension
+    # attributes may contain arbitrary values, so every unknown attribute stays redacted.
+    safe_attributes: list[str] = []
+    for raw_attribute in value.split(";")[1:]:
+        attribute = raw_attribute.strip()
+        lowered = attribute.lower()
+        if lowered == "secure":
+            safe_attributes.append("Secure")
+        elif lowered == "httponly":
+            safe_attributes.append("HttpOnly")
+        elif lowered.startswith("samesite="):
+            same_site = lowered.partition("=")[2].strip()
+            if same_site in {"strict", "lax", "none"}:
+                safe_attributes.append(f"SameSite={same_site.title()}")
+    return "; ".join(["[redacted]", *dict.fromkeys(safe_attributes)])
 
 
 def probe_http_head(url: str, endpoint: ResolvedEndpoint, *, timeout: float) -> dict[str, Any]:
