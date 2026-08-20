@@ -17,6 +17,11 @@ class Capability(StrEnum):
     PLAN_ASSESSMENT = "plan:assessment"
     ANALYZE_HEADERS = "analyze:headers"
     SCAN_REPOSITORY = "scan:repository"
+    PROBE_HTTP = "probe:http"
+    INSPECT_TLS = "inspect:tls"
+    PROBE_TCP_PORTS = "probe:tcp-ports"
+    RUN_POSTURE_ASSESSMENT = "run:posture-assessment"
+    SIMULATE_EDUCATION = "simulate:education"
     READ_AUDIT = "audit:read"
 
 

@@ -24,12 +24,18 @@ The primary controls are:
 - operator-only execute engagement creation
 - operator-only revocation of execute engagements
 - a second environment-controlled execution gate
-- an optional mandatory HMAC-sealed audit gate for execution
+- an independent network execution gate
+- an optional mandatory HMAC-sealed audit gate for every execute operation
 - expiring capability grants
 - canonical target and path scope checks
 - operator root allowlists and no-follow file opening on supported POSIX platforms
 - bounded file count, file size, total bytes, findings, targets, and header input
-- no arbitrary subprocess, shell, network request, or dynamic-code tool
+- hostname plus resolved-address network allowlists
+- fixed HTTP HEAD, TLS handshake, and connect-only TCP probes with strict limits
+- fixed-sequence posture orchestration with full preflight, one pinned DNS result, and
+  fail-closed execution
+- offline education simulation restricted to dry-run mode and `training.invalid`
+- no arbitrary subprocess, shell, request, exploit, password, payload, or dynamic-code tool
 - HMAC-fingerprinted secret findings with raw values excluded
 - durable scan manifests and ruleset digests
 - hash-chained events plus an HMAC-sealed audit checkpoint
@@ -44,9 +50,18 @@ The primary controls are:
   silent key replacement intentionally fails closed.
 - The built-in scanner is a focused baseline, not a replacement for Semgrep, CodeQL,
   Gitleaks, Trivy, or professional review.
-- File scanning still relies on the local operating system's discretionary access
-  controls. Platforms without relative no-follow file opening receive a stricter
-  best-effort path check but not the same race resistance as supported POSIX systems.
+- File scanning relies on the local operating system's discretionary access controls.
+  Platforms without relative no-follow file opening receive a stricter best-effort path
+  check but not the same race resistance as supported POSIX systems.
+- HTTP probing intentionally does not follow redirects, send bodies, or support
+  authentication. TLS probing requires a certificate-validating handshake.
+- TCP results distinguish only `open` from `closed-or-filtered`; they do not identify
+  services and are not a replacement for a reviewed professional assessment.
+- The posture runner does not make risk-based decisions, select targets or techniques,
+  exploit findings, or retry failed probes. It is deliberately not an attack agent.
+- Education scenarios are static defensive table-tops with no network, filesystem,
+  command, payload, credential, or real-target input path. An education label never
+  enables otherwise excluded operational behavior.
 - ScopeGuard does not establish that a ticket represents legal authorization; the human
   operator remains responsible for verifying it.
 

@@ -24,8 +24,11 @@ mcp = MCPServer(
         "Use only for systems and repositories the operator is authorized to assess. "
         "Every target operation requires an unexpired engagement and explicit capability. "
         "MCP clients can create dry-run engagements only; execute engagements must be "
-        "created by an operator through the local CLI. No arbitrary shell or network "
-        "execution is exposed."
+        "created by an operator through the local CLI. Bounded network probes additionally "
+        "require operator host and CIDR allowlists. No arbitrary shell, exploit, credential, "
+        "password-attack, or payload execution is exposed. The posture runner uses a fixed, "
+        "fail-closed sequence and never chooses attack actions from results. Education "
+        "scenarios are offline simulations locked to training.invalid and dry-run mode."
     ),
 )
 
@@ -48,7 +51,7 @@ def _safe_call(operation: Callable[[], dict[str, Any]]) -> dict[str, Any]:
 @mcp.tool(
     title="ScopeGuard health",
     annotations=ToolAnnotations(
-        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+        read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
     ),
 )
 def health() -> dict[str, Any]:
@@ -59,7 +62,7 @@ def health() -> dict[str, Any]:
 @mcp.tool(
     title="Create dry-run engagement",
     annotations=ToolAnnotations(
-        readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False
+        read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False
     ),
 )
 def create_dry_run_engagement(
@@ -85,7 +88,7 @@ def create_dry_run_engagement(
 @mcp.tool(
     title="Revoke engagement",
     annotations=ToolAnnotations(
-        readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False
+        read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=False
     ),
 )
 def revoke_engagement(engagement_id: str) -> dict[str, Any]:
@@ -96,7 +99,7 @@ def revoke_engagement(engagement_id: str) -> dict[str, Any]:
 @mcp.tool(
     title="Check target scope",
     annotations=ToolAnnotations(
-        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+        read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
     ),
 )
 def check_scope(engagement_id: str, target: str) -> dict[str, Any]:
@@ -107,7 +110,7 @@ def check_scope(engagement_id: str, target: str) -> dict[str, Any]:
 @mcp.tool(
     title="Plan defensive assessment",
     annotations=ToolAnnotations(
-        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+        read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
     ),
 )
 def plan_assessment(engagement_id: str, target: str, profile: str = "baseline") -> dict[str, Any]:
@@ -118,7 +121,7 @@ def plan_assessment(engagement_id: str, target: str, profile: str = "baseline") 
 @mcp.tool(
     title="Analyze HTTP security headers",
     annotations=ToolAnnotations(
-        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+        read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
     ),
 )
 def analyze_headers(engagement_id: str, target: str, headers: dict[str, str]) -> dict[str, Any]:
@@ -129,7 +132,7 @@ def analyze_headers(engagement_id: str, target: str, headers: dict[str, str]) ->
 @mcp.tool(
     title="Scan authorized local repository",
     annotations=ToolAnnotations(
-        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+        read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
     ),
 )
 def scan_repository(engagement_id: str, path: str) -> dict[str, Any]:
@@ -138,9 +141,75 @@ def scan_repository(engagement_id: str, path: str) -> dict[str, Any]:
 
 
 @mcp.tool(
+    title="Probe authorized HTTP endpoint",
+    annotations=ToolAnnotations(
+        read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=True
+    ),
+)
+def probe_http(engagement_id: str, target: str) -> dict[str, Any]:
+    """Send one allowlisted HEAD request, without a body, credentials, or redirects."""
+    return _safe_call(lambda: get_service().probe_http(engagement_id, target))
+
+
+@mcp.tool(
+    title="Inspect authorized TLS endpoint",
+    annotations=ToolAnnotations(
+        read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=True
+    ),
+)
+def inspect_tls(engagement_id: str, target: str, port: int | None = None) -> dict[str, Any]:
+    """Validate one allowlisted TLS handshake and return bounded certificate metadata."""
+    return _safe_call(lambda: get_service().inspect_tls(engagement_id, target, port))
+
+
+@mcp.tool(
+    title="Probe authorized TCP ports",
+    annotations=ToolAnnotations(
+        read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=True
+    ),
+)
+def probe_tcp_ports(engagement_id: str, target: str, ports: list[int]) -> dict[str, Any]:
+    """Try bounded TCP connects to one allowlisted host without banner collection."""
+    return _safe_call(lambda: get_service().probe_tcp_ports(engagement_id, target, ports))
+
+
+@mcp.tool(
+    title="Run guarded posture assessment",
+    annotations=ToolAnnotations(
+        read_only_hint=True, destructive_hint=False, idempotent_hint=False, open_world_hint=True
+    ),
+)
+def run_posture_assessment(
+    engagement_id: str,
+    url_target: str,
+    host_target: str,
+    ports: list[int],
+) -> dict[str, Any]:
+    """Run a fixed, fail-closed sequence of the authorized HTTP, TLS, and TCP probes."""
+    return _safe_call(
+        lambda: get_service().run_posture_assessment(engagement_id, url_target, host_target, ports)
+    )
+
+
+@mcp.tool(
+    title="Simulate education-only security scenario",
+    annotations=ToolAnnotations(
+        read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
+    ),
+)
+def simulate_education_scenario(
+    engagement_id: str,
+    scenario: str,
+    difficulty: str = "beginner",
+) -> dict[str, Any]:
+    """Run an offline defensive tabletop with no real target or operational actions."""
+    return _safe_call(lambda: get_service().simulate_education(engagement_id, scenario, difficulty))
+
+
+@mcp.tool(
     title="Read engagement audit events",
     annotations=ToolAnnotations(
-        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+        read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
     ),
 )
 def list_audit_events(engagement_id: str, limit: int = 100) -> dict[str, Any]:
@@ -151,7 +220,7 @@ def list_audit_events(engagement_id: str, limit: int = 100) -> dict[str, Any]:
 @mcp.tool(
     title="Verify audit chain",
     annotations=ToolAnnotations(
-        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+        read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
     ),
 )
 def verify_audit_chain() -> dict[str, Any]:
@@ -162,7 +231,7 @@ def verify_audit_chain() -> dict[str, Any]:
 @mcp.tool(
     title="Read repository scan evidence",
     annotations=ToolAnnotations(
-        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+        read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False
     ),
 )
 def list_scan_runs(engagement_id: str, limit: int = 100) -> dict[str, Any]:

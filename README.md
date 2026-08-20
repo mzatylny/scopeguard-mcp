@@ -6,10 +6,11 @@
 [![MCP](https://img.shields.io/badge/MCP-2.0-purple.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-ScopeGuard is a policy-first defensive security server for MCP. It lets AI clients plan
-assessments, evaluate web security headers, and scan explicitly authorized local source
-trees without exposing a general shell, network scanner, exploit generator, or credential
-tool.
+ScopeGuard is a policy-first defensive security and bounded posture-testing server for
+MCP. It lets AI clients plan assessments, evaluate web security headers, scan explicitly
+authorized local source trees, and run guarded HTTP, TLS, and single-host TCP checks
+without exposing a general shell, unrestricted network scanner, exploit generator, or
+credential tool.
 
 The project demonstrates senior security-engineering concerns beyond rule detection:
 authorization boundaries, canonical scope evaluation, dual execution gates, bounded
@@ -22,10 +23,11 @@ modeling, supply-chain controls, and negative testing.
 - Execute engagements are created and revoked only through the local operator CLI.
 - Every target operation requires an active engagement, an explicit capability, and a
   canonical target that matches scope.
-- Repository scans require both an execute engagement and the operator-controlled
-  `SCOPEGUARD_EXECUTION_ENABLED` gate.
-- Production execution can require an HMAC-sealed audit checkpoint. A missing or invalid
-  seal fails closed.
+- Execute operations require an operator-created execute engagement and the
+  operator-controlled `SCOPEGUARD_EXECUTION_ENABLED` gate. Network probes also require
+  their independent network gate and host/address allowlists.
+- Production execution can require an HMAC-sealed audit checkpoint. Every execute path
+  fails closed when a required seal is missing or invalid.
 - File traversal is bounded by file count, file size, total bytes, and finding count.
 - Repository files are opened as regular files without following symlink components on
   supported POSIX platforms, reducing path-race exposure.
@@ -50,7 +52,10 @@ flowchart LR
     C --> E["Capability + expiry gate"]
     C --> F["Dual execution gate"]
     F --> G["Bounded repository analyzer"]
+    F --> M["Network gate + allowlists"]
+    M --> N["Pinned bounded probes"]
     C --> H["Offline header analyzer"]
+    C --> P["Offline training simulator"]
     C --> I[("SQLite engagements")]
     G --> J[("Durable scan evidence")]
     C --> K[("Hash-chained audit events")]
@@ -71,7 +76,12 @@ See [ARCHITECTURE.md](ARCHITECTURE.md),
 | `check_scope` | Normalize and evaluate a target | Active engagement required |
 | `plan_assessment` | Produce a bounded web or repository plan | No network or process execution |
 | `analyze_headers` | Inspect caller-supplied response headers | Offline and input-bounded |
-| `scan_repository` | Run read-only Python and secret checks | Requires both execution gates |
+| `scan_repository` | Run read-only Python and secret checks | Execute grant, environment gate, and audit policy |
+| `probe_http` | Make one allowlisted HTTP HEAD request | No body, credentials, or redirects |
+| `inspect_tls` | Validate one allowlisted TLS handshake | Certificate validation is mandatory |
+| `probe_tcp_ports` | Connect to bounded ports on one allowlisted host | No banners or application data |
+| `run_posture_assessment` | Run the fixed TCP → TLS → HTTP workflow | Fully preflighted; stops on first error |
+| `simulate_education_scenario` | Run a defensive tabletop | Offline, dry-run, and `training.invalid` only |
 | `list_audit_events` | Read engagement-specific evidence | Requires `audit:read` |
 | `list_scan_runs` | Read durable scan manifests and outcomes | Requires `audit:read` |
 | `verify_audit_chain` | Verify event order and the signed head | Does not reveal signing material |
@@ -142,13 +152,94 @@ scopeguard export-audit-checkpoint > scopeguard-audit-head.json
 The checkpoint contains only the event count, chain head, key identifier, and HMAC
 signature. It never includes the signing key.
 
+### Bounded network posture testing
+
+Network probes are off by default and require an additional operator gate. A hostname
+must match `SCOPEGUARD_ALLOWED_HOSTS`, and every address returned by DNS must fit
+`SCOPEGUARD_ALLOWED_NETWORKS`. Direct IP targets must fit the network allowlist. This
+two-part rule prevents a permitted name from resolving to an unexpected address.
+
+```bash
+export SCOPEGUARD_STATE_DIR=/absolute/path/to/scopeguard-state
+export SCOPEGUARD_EXECUTION_ENABLED=true
+export SCOPEGUARD_NETWORK_ENABLED=true
+export SCOPEGUARD_REQUIRE_SEALED_AUDIT=true
+export SCOPEGUARD_AUDIT_HMAC_KEY='value-loaded-from-your-secret-manager'
+export SCOPEGUARD_AUDIT_KEY_ID='primary-2026'
+export SCOPEGUARD_ALLOWED_HOSTS=staging.example.com,*.staging.example.com
+export SCOPEGUARD_ALLOWED_NETWORKS=192.0.2.0/24,2001:db8::/32
+
+scopeguard create-engagement \
+  --title "Authorized staging posture review" \
+  --ticket SEC-5678 \
+  --target staging.example.com \
+  --target https://staging.example.com/ \
+  --capability probe:http \
+  --capability inspect:tls \
+  --capability probe:tcp-ports \
+  --capability run:posture-assessment \
+  --capability audit:read \
+  --mode execute \
+  --expires-in-minutes 30
+
+scopeguard-mcp
+```
+
+The HTTP tool sends only `HEAD`, does not accept credentials or a request body, pins the
+connection to a pre-authorized DNS answer, and never follows redirects. Sensitive
+response headers are redacted; cookie output retains only the `Secure`, `HttpOnly`, and
+validated `SameSite` attributes needed for hardening analysis. The TCP tool accepts at
+most 32 unique ports by default, uses connect-only checks, and never sends application
+data or captures banners.
+
+### Guarded autonomous workflow
+
+`run_posture_assessment` automates only a predeclared posture sequence. Before the first
+connection it validates the workflow capability, every underlying probe capability, both
+the URL and host scopes, target-host equality, the port limit, the execute gate, and the
+network gate. It resolves and authorizes the host once, then reuses that pinned address for
+every step. HTTPS runs TCP → TLS → HTTP; HTTP runs TCP → HTTP. The workflow stops at the
+first error and records completed steps in the audit chain.
+
+It does not choose new tools or targets from results, exploit findings, submit payloads,
+retry with different techniques, or start follow-on actions. A dry-run returns the exact
+planned sequence without making a connection.
+
+### Education-only simulation
+
+`simulate_education_scenario` teaches security response through deterministic offline
+tabletops. It accepts no real target: the engagement must scope exactly the reserved domain
+`training.invalid`, and execute-mode engagements are rejected. The simulator never calls
+the network, reads files, invokes commands, generates payloads, exposes credentials, or
+selects operational attack actions.
+
+```bash
+scopeguard create-engagement \
+  --title "Offline security tabletop" \
+  --ticket EDU-100 \
+  --target training.invalid \
+  --capability simulate:education \
+  --capability audit:read \
+  --mode dry-run \
+  --expires-in-minutes 60
+```
+
+Supported scenarios are `exposed-service`, `web-hardening`, and `repository-secret`, at
+`beginner`, `intermediate`, or `advanced` difficulty. Results contain only synthetic
+events, defensive signals, learner questions, and defensive response actions.
+
 ## Capabilities
 
 | Capability | Allows |
 |---|---|
 | `plan:assessment` | Bounded web or repository planning for an in-scope target |
 | `analyze:headers` | Offline analysis of supplied HTTP headers |
-| `scan:repository` | Built-in read-only scanning under both execution gates |
+| `scan:repository` | Built-in read-only scanning under the execution and audit gates |
+| `probe:http` | One allowlisted, no-redirect HTTP HEAD request |
+| `inspect:tls` | One allowlisted, certificate-validating TLS handshake |
+| `probe:tcp-ports` | Bounded connect-only TCP checks against one host |
+| `run:posture-assessment` | Fixed, fail-closed orchestration of the bounded probes |
+| `simulate:education` | Offline defensive tabletop locked to `training.invalid` |
 | `audit:read` | Engagement audit events and durable scan-run evidence |
 
 ## Configuration
@@ -168,6 +259,23 @@ signature. It never includes the signing key.
 | `SCOPEGUARD_MAX_FILE_BYTES` | `1000000` | Per-file read ceiling |
 | `SCOPEGUARD_MAX_TOTAL_BYTES` | `50000000` | Total repository read ceiling |
 | `SCOPEGUARD_MAX_FINDINGS` | `2000` | Returned finding ceiling |
+| `SCOPEGUARD_NETWORK_ENABLED` | `false` | Independently enables bounded network probes |
+| `SCOPEGUARD_ALLOWED_HOSTS` | empty | Comma-separated exact or `*.` hostname allowlist |
+| `SCOPEGUARD_ALLOWED_NETWORKS` | empty | Comma-separated IP/CIDR allowlist |
+| `SCOPEGUARD_MAX_PORTS` | `32` | Unique TCP ports per call; hard ceiling is 128 |
+| `SCOPEGUARD_NETWORK_TIMEOUT_SECONDS` | `3` | Per-connection timeout; range is 0.1–10 seconds |
+
+The MCP server itself intentionally exposes only stdio. A future server transport must ship
+with standards-based authentication, request-size limits, and explicit deployment
+guidance; binding an unauthenticated security service to a port is not accepted here.
+
+## Safety boundary
+
+ScopeGuard supports authorized posture testing, not unrestricted offensive automation.
+It does not provide arbitrary requests or commands, password attacks, credential capture,
+exploit or payload generation, persistence, evasion, denial of service, CIDR-wide scans,
+or autonomous attack chains. The fixed posture runner is defensive orchestration, not an
+attack agent; these exclusions are trust boundaries, not missing tools.
 
 ## Repository analysis
 
@@ -202,6 +310,7 @@ The repository includes:
 Local verification:
 
 ```bash
+python -m pip install --upgrade pip
 pip install -e ".[dev]"
 ruff check .
 ruff format --check .

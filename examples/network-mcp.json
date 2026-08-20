@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "scopeguard": {
+      "command": "/absolute/path/to/scopeguard-mcp/.venv/bin/scopeguard-mcp",
+      "env": {
+        "SCOPEGUARD_STATE_DIR": "/absolute/path/to/scopeguard-state",
+        "SCOPEGUARD_EXECUTION_ENABLED": "true",
+        "SCOPEGUARD_NETWORK_ENABLED": "true",
+        "SCOPEGUARD_ALLOWED_HOSTS": "staging.example.com,*.staging.example.com",
+        "SCOPEGUARD_ALLOWED_NETWORKS": "192.0.2.0/24,2001:db8::/32"
+      }
+    }
+  }
+}

@@ -3,19 +3,28 @@
 ```mermaid
 flowchart LR
     A["MCP client"] --> B["MCP v2 stdio server"]
-    O["Operator CLI and environment"] --> C["Policy engine"]
+    OP["Operator CLI and environment"] --> C["Policy engine"]
     B --> C
     C --> D["Scope normalizer"]
     C --> E["Capability and expiry checks"]
     C --> F["Dual execution gate"]
+    C --> NG["Network execution gate"]
+    NG --> NA["Host plus CIDR allowlists"]
+    NA --> PW["Fixed fail-closed posture workflow"]
     D --> G["Offline header analyzer"]
     F --> H["Read-only repository analyzer"]
+    NA --> NP["Bounded HTTP, TLS, and TCP probes"]
     C --> I[("SQLite engagements")]
     C --> J[("Hash-chained audit events")]
-    H --> K[("Durable scan runs")]
-    J --> L["HMAC-sealed checkpoint"]
+    H --> SR[("Durable scan runs")]
+    J --> AS["HMAC-sealed checkpoint"]
     G --> J
     H --> J
+    NP --> J
+    PW --> NP
+    PW --> J
+    B --> T["Offline education simulator"]
+    T --> J
 ```
 
 ## Trust boundaries
@@ -30,8 +39,16 @@ flowchart LR
 4. Repository paths must also be under an operator-configured allowed root. Paths are
    canonicalized before authorization and files are opened without following symlink
    components on supported POSIX platforms.
-5. The server does not expose an arbitrary command, shell, Python execution, network
-   request, exploit, credential, or payload tool.
+5. Network probes require the execute gate, a separate network gate, exact or wildcard
+   hostname approval, and approval for every resolved IP address. Connections use the
+   approved address directly to reduce DNS-rebinding risk.
+6. The server does not expose an arbitrary command, shell, Python execution, arbitrary
+   request, exploit, credential, password-attack, or payload tool.
+7. The posture workflow preflights every capability and target, resolves and authorizes one
+   pinned endpoint for all steps, follows a fixed sequence, stops on the first error, and
+   cannot choose follow-on techniques from results.
+8. The education simulator is restricted to dry-run engagements scoped to the reserved
+   `training.invalid` domain and has no runtime, filesystem, or network adapter.
 
 ## Data flow
 
@@ -41,8 +58,9 @@ flowchart LR
    traversal; canonicalizes domains, IPs, CIDRs, and local paths; then compares scope.
 4. Authorization success or failure is appended to the global audit chain.
 5. Offline analysis runs only after authorization. Repository analysis additionally
-   checks both execution gates, operator roots, and—when configured—a valid sealed audit
-   checkpoint.
+   checks the execution gate and operator roots. Network probes additionally check the
+   network gate and both operator allowlists. Every execute path also requires a valid
+   sealed audit checkpoint when that operator policy is enabled.
 6. Results return structured data. Secret matches are replaced by keyed HMAC
    fingerprints, while file content is represented by a deterministic manifest digest.
 7. The scan outcome and evidence digests are persisted before the completion event is
@@ -65,7 +83,8 @@ cross-system anchor.
 
 The analyzer enforces independent ceilings for file count, per-file bytes, total bytes,
 and returned findings. Header analysis has count and total-byte limits and rejects newline
-characters. Engagement metadata has bounded field lengths and a bounded target count.
+characters. Network checks enforce bounded timeouts and port counts and operate on one
+host at a time. Engagement metadata has bounded field lengths and a bounded target count.
 Truncation is explicit in results and scan evidence.
 
 ## Extension rule

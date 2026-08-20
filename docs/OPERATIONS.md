@@ -9,7 +9,10 @@
    from a secret manager. Never commit it or pass it as a CLI argument.
 4. Give the key a non-secret rotation identifier with `SCOPEGUARD_AUDIT_KEY_ID`.
 5. Set `SCOPEGUARD_ALLOWED_ROOTS` to the smallest required directory set.
-6. Run `scopeguard doctor` and require `ok: true`, `audit_chain.valid: true`, and
+6. Leave `SCOPEGUARD_NETWORK_ENABLED=false` unless bounded probes are required. When they
+   are required, configure the smallest exact/wildcard hostname set and IP/CIDR set; both
+   allowlists must independently authorize the destination.
+7. Run `scopeguard doctor` and require `ok: true`, `audit_chain.valid: true`, and
    `execution_ready: true` before creating an execute engagement.
 
 ## Before an assessment
@@ -18,11 +21,15 @@
 - Prefer one repository root and the minimum capability set.
 - Keep engagement lifetimes short.
 - Review configured file, byte, and finding ceilings against repository size.
+- For network work, review the hostname patterns, resolved-address ranges, port count,
+  timeout, URL/host target equality, and exact fixed workflow before enabling the network
+  gate. Confirm all current DNS answers are expected.
 - Confirm the state volume has adequate space and is not inside the target repository.
 
 ## After an assessment
 
-1. Revoke the execute engagement through the operator CLI.
+1. Revoke the execute engagement through the operator CLI and disable the network and
+   execution environment gates when they are no longer needed.
 2. Run `scopeguard verify-audit`.
 3. Export the signed head with `scopeguard export-audit-checkpoint`.
 4. Store the checkpoint in an append-only external system with the ticket and scan ID.
@@ -54,7 +61,7 @@ This produces an explicit evidence boundary between key generations.
 If audit verification fails, an unexpected execute engagement appears, or a secret value
 is observed in output:
 
-1. Stop the server and unset the execution gate.
+1. Stop the server and unset both the network and execution gates.
 2. Preserve the state database, WAL/SHM files, configuration, process logs, and last
    external checkpoint without modifying them.
 3. Revoke or rotate any potentially exposed credential outside ScopeGuard.

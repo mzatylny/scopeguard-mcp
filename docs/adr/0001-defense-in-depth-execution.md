@@ -12,15 +12,20 @@ tampering, and path checks performed separately from file opening leave a race w
 
 ## Decision
 
-Repository execution requires all of the following:
+Every execute operation requires all of the following:
 
 1. an operator-created execute engagement;
-2. an active, unexpired grant containing `scan:repository`;
-3. a canonical file target inside engagement scope;
-4. membership under an operator-configured allowed root;
+2. an active, unexpired grant containing the operation-specific capability;
+3. a canonical target inside engagement scope;
+4. any operation-specific operator allowlist;
 5. `SCOPEGUARD_EXECUTION_ENABLED=true` in the server environment;
 6. a valid HMAC-sealed audit checkpoint when sealed execution is required; and
-7. bounded, no-follow file access by the built-in analyzer.
+7. a fixed, bounded implementation rather than an arbitrary execution primitive.
+
+Repository scans additionally require membership under an allowed root and bounded,
+no-follow file access. Network probes additionally require the independent network gate,
+hostname and resolved-address allowlists, one pinned DNS answer, strict time/port limits,
+and fixed HEAD, TLS-handshake, or connect-only behavior.
 
 MCP callers may create and revoke dry-run engagements but cannot create or revoke execute
 grants. The server exposes no arbitrary command, subprocess, network-request, or dynamic
@@ -33,5 +38,6 @@ code primitive.
   required.
 - Operations need secret-key management, explicit rotation, and external audit anchoring.
 - Unsupported platforms receive a documented best-effort file-opening fallback.
-- Adding an external analyzer requires a new capability, fixed arguments, limits,
-  redaction, evidence design, and negative tests rather than a generic shell adapter.
+- Adding an external analyzer or network action requires a new capability, fixed
+  arguments, limits, redaction, evidence design, and negative tests rather than a generic
+  shell or request adapter.

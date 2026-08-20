@@ -123,7 +123,7 @@ class Store:
         row = connection.execute("SELECT * FROM audit_checkpoint WHERE singleton=1").fetchone()
         if row is not None:
             if self.audit_hmac_key and row["signature"] is None:
-                signature = _checkpoint_signature(
+                migrated_signature = _checkpoint_signature(
                     self.audit_hmac_key,
                     event_count=int(row["event_count"]),
                     head_hash=row["head_hash"],
@@ -131,7 +131,7 @@ class Store:
                 )
                 connection.execute(
                     "UPDATE audit_checkpoint SET key_id=?, signature=? WHERE singleton=1",
-                    (self.audit_key_id, signature),
+                    (self.audit_key_id, migrated_signature),
                 )
             return
         last = connection.execute(
@@ -139,7 +139,7 @@ class Store:
         ).fetchone()
         event_count = int(connection.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0])
         head_hash = last["event_hash"] if last else _GENESIS_HASH
-        signature = (
+        initial_signature = (
             _checkpoint_signature(
                 self.audit_hmac_key,
                 event_count=event_count,
@@ -155,7 +155,7 @@ class Store:
                 singleton, event_count, head_hash, key_id, signature
             ) VALUES (1, ?, ?, ?, ?)
             """,
-            (event_count, head_hash, self.audit_key_id, signature),
+            (event_count, head_hash, self.audit_key_id, initial_signature),
         )
 
     def save_engagement(self, engagement: Engagement) -> None:
@@ -280,9 +280,11 @@ class Store:
                     digest,
                 ),
             )
+            if cursor.lastrowid is None:
+                raise ConfigurationError("audit event insert did not return a sequence")
             sequence = int(cursor.lastrowid)
             next_count = event_count + 1
-            signature = (
+            next_signature = (
                 _checkpoint_signature(
                     self.audit_hmac_key,
                     event_count=next_count,
@@ -298,7 +300,7 @@ class Store:
                 SET event_count=?, head_hash=?, key_id=?, signature=?
                 WHERE singleton=1
                 """,
-                (next_count, digest, self.audit_key_id, signature),
+                (next_count, digest, self.audit_key_id, next_signature),
             )
         return {"sequence": sequence, **payload, "previous_hash": previous_hash, "hash": digest}
 

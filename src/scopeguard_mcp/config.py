@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .errors import ConfigurationError
+
+_HOST_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$", re.IGNORECASE)
 
 
 def _parse_bool(value: str, name: str) -> bool:
@@ -27,6 +31,78 @@ def _parse_positive_int(value: str, name: str) -> int:
     if parsed <= 0:
         raise ConfigurationError(f"{name} must be a positive integer")
     return parsed
+
+
+def _parse_bounded_int(value: str, name: str, *, maximum: int) -> int:
+    parsed = _parse_positive_int(value, name)
+    if parsed > maximum:
+        raise ConfigurationError(f"{name} must not exceed {maximum}")
+    return parsed
+
+
+def _parse_timeout(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise ConfigurationError("SCOPEGUARD_NETWORK_TIMEOUT_SECONDS must be a number") from exc
+    if not 0.1 <= parsed <= 10:
+        raise ConfigurationError("SCOPEGUARD_NETWORK_TIMEOUT_SECONDS must be between 0.1 and 10")
+    return parsed
+
+
+def _parse_csv(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    return tuple(item.strip() for item in value.split(",") if item.strip())
+
+
+def _parse_hosts(value: str | None) -> tuple[str, ...]:
+    hosts: list[str] = []
+    for item in _parse_csv(value):
+        wildcard = item.startswith("*.")
+        candidate = item[2:] if wildcard else item
+        if "*" in candidate:
+            raise ConfigurationError(
+                f"SCOPEGUARD_ALLOWED_HOSTS contains an invalid wildcard: {item}"
+            )
+        try:
+            candidate = candidate.rstrip(".").encode("idna").decode("ascii").lower()
+        except UnicodeError as exc:
+            raise ConfigurationError(
+                f"SCOPEGUARD_ALLOWED_HOSTS contains an invalid hostname: {item}"
+            ) from exc
+        try:
+            ipaddress.ip_address(candidate)
+        except ValueError:
+            pass
+        else:
+            raise ConfigurationError(
+                "SCOPEGUARD_ALLOWED_HOSTS accepts hostnames only; "
+                "authorize direct IP targets with SCOPEGUARD_ALLOWED_NETWORKS"
+            )
+        labels = candidate.split(".")
+        if (
+            not candidate
+            or len(candidate) > 253
+            or any(not _HOST_LABEL_RE.fullmatch(label) for label in labels)
+        ):
+            raise ConfigurationError(
+                f"SCOPEGUARD_ALLOWED_HOSTS contains an invalid hostname: {item}"
+            )
+        hosts.append(("*." if wildcard else "") + candidate)
+    return tuple(dict.fromkeys(hosts))
+
+
+def _parse_networks(value: str | None) -> tuple[str, ...]:
+    networks: list[str] = []
+    for item in _parse_csv(value):
+        try:
+            networks.append(str(ipaddress.ip_network(item, strict=False)))
+        except ValueError as exc:
+            raise ConfigurationError(
+                f"SCOPEGUARD_ALLOWED_NETWORKS contains an invalid CIDR: {item}"
+            ) from exc
+    return tuple(networks)
 
 
 def _load_audit_key() -> tuple[bytes | None, str]:
@@ -67,6 +143,11 @@ class Settings:
     require_sealed_audit: bool = False
     audit_hmac_key: bytes | None = field(default=None, repr=False)
     audit_key_id: str = "unsealed"
+    network_enabled: bool = False
+    allowed_hosts: tuple[str, ...] = ()
+    allowed_networks: tuple[str, ...] = ()
+    max_ports: int = 32
+    network_timeout_seconds: float = 3.0
 
     @classmethod
     def from_env(cls, project_root: Path | None = None) -> Settings:
@@ -129,6 +210,20 @@ class Settings:
             ),
             audit_hmac_key=audit_hmac_key,
             audit_key_id=audit_key_id,
+            network_enabled=_parse_bool(
+                os.getenv("SCOPEGUARD_NETWORK_ENABLED", "false"),
+                "SCOPEGUARD_NETWORK_ENABLED",
+            ),
+            allowed_hosts=_parse_hosts(os.getenv("SCOPEGUARD_ALLOWED_HOSTS")),
+            allowed_networks=_parse_networks(os.getenv("SCOPEGUARD_ALLOWED_NETWORKS")),
+            max_ports=_parse_bounded_int(
+                os.getenv("SCOPEGUARD_MAX_PORTS", "32"),
+                "SCOPEGUARD_MAX_PORTS",
+                maximum=128,
+            ),
+            network_timeout_seconds=_parse_timeout(
+                os.getenv("SCOPEGUARD_NETWORK_TIMEOUT_SECONDS", "3")
+            ),
         )
 
     def ensure_state_dir(self) -> None:

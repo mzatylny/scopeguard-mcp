@@ -26,6 +26,32 @@ class FakeService:
     def scan_repository(self, engagement_id, path):
         return {"id": engagement_id, "path": path}
 
+    def probe_http(self, engagement_id, target):
+        return {"id": engagement_id, "target": target, "kind": "http"}
+
+    def inspect_tls(self, engagement_id, target, port):
+        return {"id": engagement_id, "target": target, "port": port, "kind": "tls"}
+
+    def probe_tcp_ports(self, engagement_id, target, ports):
+        return {"id": engagement_id, "target": target, "ports": ports, "kind": "tcp"}
+
+    def run_posture_assessment(self, engagement_id, url_target, host_target, ports):
+        return {
+            "id": engagement_id,
+            "url_target": url_target,
+            "host_target": host_target,
+            "ports": ports,
+            "kind": "workflow",
+        }
+
+    def simulate_education(self, engagement_id, scenario, difficulty):
+        return {
+            "id": engagement_id,
+            "scenario": scenario,
+            "difficulty": difficulty,
+            "kind": "education",
+        }
+
     def list_audit(self, engagement_id, limit):
         return {"id": engagement_id, "limit": limit}
 
@@ -49,6 +75,19 @@ def test_server_tools_delegate_and_force_dry_run(monkeypatch):
     assert server.plan_assessment("eng", "example.com", "web")["profile"] == "web"
     assert server.analyze_headers("eng", "https://example.com", {"x": "y"})["headers"]
     assert server.scan_repository("eng", ".")["path"] == "."
+    assert server.probe_http("eng", "https://example.com")["kind"] == "http"
+    assert server.inspect_tls("eng", "example.com", 8443)["port"] == 8443
+    assert server.probe_tcp_ports("eng", "example.com", [80, 443])["ports"] == [80, 443]
+    assert (
+        server.run_posture_assessment("eng", "https://example.com", "example.com", [80, 443])[
+            "kind"
+        ]
+        == "workflow"
+    )
+    assert (
+        server.simulate_education_scenario("eng", "web-hardening", "advanced")["kind"]
+        == "education"
+    )
     assert server.list_audit_events("eng", 5)["limit"] == 5
     assert server.verify_audit_chain()["valid"] is True
     assert server.list_scan_runs("eng", 3)["limit"] == 3

@@ -1,16 +1,16 @@
 [build-system]
-requires = ["hatchling>=1.27"]
+requires = ["hatchling>=1.27,<1.32"]
 build-backend = "hatchling.build"
 
 [project]
 name = "scopeguard-mcp"
-version = "1.0.0"
-description = "Policy-first defensive security operations server for MCP"
+version = "1.1.0"
+description = "Policy-first defensive security operations and bounded posture testing for MCP"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Mateusz Marek Zatylny" }]
-keywords = ["mcp", "security", "defensive-security", "sast", "audit"]
+keywords = ["mcp", "security", "defensive-security", "sast", "audit", "tls"]
 classifiers = [
   "Development Status :: 5 - Production/Stable",
   "License :: OSI Approved :: MIT License",
@@ -33,7 +33,7 @@ dev = [
   "bandit[toml]>=1.8,<2",
   "mypy>=1.14,<2",
   "pip-audit>=2.7,<3",
-  "pytest>=8.3,<9",
+  "pytest>=9.0.3,<10",
   "pytest-cov>=6,<8",
   "ruff>=0.16,<1",
   "twine>=6,<7",

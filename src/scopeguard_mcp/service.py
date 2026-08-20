@@ -6,14 +6,24 @@ import hashlib
 import hmac
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from . import __version__
-from .analyzers import analyze_security_headers, scan_repository
+from .analyzers import (
+    analyze_security_headers,
+    inspect_tls_endpoint,
+    probe_http_head,
+    probe_tcp_ports,
+    resolve_allowed_endpoint,
+    scan_repository,
+)
+from .analyzers.network import ResolvedEndpoint
 from .config import Settings
-from .errors import AnalysisError, AuthorizationError
-from .models import Capability, EngagementMode
+from .errors import AnalysisError, AuthorizationError, NetworkProbeError, ScopeGuardError
+from .models import Capability, Engagement, EngagementMode, NormalizedTarget
 from .policy import PolicyEngine
 from .storage import Store
+from .training import TRAINING_TARGET, simulate_training_scenario
 
 
 class ScopeGuardService:
@@ -43,6 +53,13 @@ class ScopeGuardService:
             "name": "scopeguard-mcp",
             "version": __version__,
             "execution_enabled": self.settings.execution_enabled,
+            "network_enabled": self.settings.network_enabled,
+            "network_policy": {
+                "allowed_host_patterns": len(self.settings.allowed_hosts),
+                "allowed_networks": len(self.settings.allowed_networks),
+                "max_ports": self.settings.max_ports,
+                "timeout_seconds": self.settings.network_timeout_seconds,
+            },
             "execution_ready": execution_ready,
             "capabilities": sorted(capability.value for capability in Capability),
             "audit_chain": audit_chain,
@@ -125,8 +142,26 @@ class ScopeGuardService:
             if profile == "repository"
             else [
                 {"id": "headers.offline", "kind": "offline", "available": True},
-                {"id": "tls.inventory", "kind": "planned", "available": False},
-                {"id": "dns.inventory", "kind": "planned", "available": False},
+                {
+                    "id": "http.head",
+                    "kind": "bounded-network",
+                    "available": self._network_available,
+                },
+                {
+                    "id": "tls.handshake",
+                    "kind": "bounded-network",
+                    "available": self._network_available,
+                },
+                {
+                    "id": "tcp.connect",
+                    "kind": "bounded-network",
+                    "available": self._network_available,
+                },
+                {
+                    "id": "workflow.posture",
+                    "kind": "fixed-sequence",
+                    "available": self._network_available,
+                },
             ]
         )
         result = {
@@ -197,6 +232,479 @@ class ScopeGuardService:
             },
         )
         return {"ok": True, "analysis": analysis}
+
+    @property
+    def _network_available(self) -> bool:
+        return (
+            self.settings.execution_enabled
+            and self.settings.network_enabled
+            and bool(self.settings.allowed_networks)
+        )
+
+    def _check_network_mode(
+        self,
+        *,
+        engagement: Engagement,
+        normalized: NormalizedTarget,
+        engagement_id: str,
+        action: str,
+    ) -> dict[str, Any] | None:
+        if engagement.mode is EngagementMode.DRY_RUN:
+            self.store.append_audit(
+                engagement_id=engagement_id,
+                action=action,
+                outcome="planned",
+                details={"target": normalized.display, "reason": "engagement is dry-run"},
+            )
+            return {
+                "ok": True,
+                "status": "planned",
+                "target": normalized.as_dict(),
+                "reason": "engagement is dry-run",
+            }
+        if not self.settings.execution_enabled:
+            reason = "operator has not enabled execution"
+        elif not self.settings.network_enabled:
+            reason = "operator has not enabled bounded network probes"
+        elif self.settings.require_sealed_audit:
+            verification = self.store.verify_audit_chain()
+            if (
+                verification["valid"]
+                and verification.get("sealed")
+                and verification.get("signature_verified")
+            ):
+                return None
+            reason = "sealed audit verification is required for execution"
+        else:
+            return None
+        self.store.append_audit(
+            engagement_id=engagement_id,
+            action=action,
+            outcome="denied",
+            details={"target": normalized.display, "reason": reason},
+        )
+        raise AuthorizationError(reason)
+
+    def _audit_invalid_input(
+        self,
+        *,
+        engagement_id: str,
+        action: str,
+        target: str,
+        error: ValueError,
+    ) -> None:
+        self.store.append_audit(
+            engagement_id=engagement_id,
+            action=action,
+            outcome="denied",
+            details={"target": target, "reason": str(error)},
+        )
+
+    def _resolve_endpoint(
+        self, engagement_id: str, action: str, host: str, port: int, target: str
+    ) -> ResolvedEndpoint:
+        try:
+            return resolve_allowed_endpoint(
+                host,
+                port,
+                allowed_hosts=self.settings.allowed_hosts,
+                allowed_networks=self.settings.allowed_networks,
+            )
+        except (AuthorizationError, NetworkProbeError) as exc:
+            self.store.append_audit(
+                engagement_id=engagement_id,
+                action=action,
+                outcome="denied" if isinstance(exc, AuthorizationError) else "error",
+                details={"target": target, "reason": str(exc)},
+            )
+            raise
+
+    def probe_http(self, engagement_id: str, target: str) -> dict[str, Any]:
+        action = "http.probe"
+        engagement, normalized = self.policy.authorize(
+            engagement_id=engagement_id,
+            capability=Capability.PROBE_HTTP,
+            target=target,
+        )
+        try:
+            if normalized.kind != "url":
+                raise ValueError("HTTP probe requires an http or https URL target")
+        except ValueError as exc:
+            self._audit_invalid_input(
+                engagement_id=engagement_id,
+                action=action,
+                target=normalized.display,
+                error=exc,
+            )
+            raise
+        parsed = urlsplit(normalized.value)
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        planned = self._check_network_mode(
+            engagement=engagement,
+            normalized=normalized,
+            engagement_id=engagement_id,
+            action=action,
+        )
+        if planned is not None:
+            return planned
+        endpoint = self._resolve_endpoint(
+            engagement_id, action, parsed.hostname or "", port, normalized.display
+        )
+        return self._execute_http_probe(engagement_id, normalized, endpoint)
+
+    def _execute_http_probe(
+        self,
+        engagement_id: str,
+        normalized: NormalizedTarget,
+        endpoint: ResolvedEndpoint,
+    ) -> dict[str, Any]:
+        action = "http.probe"
+        try:
+            result = probe_http_head(
+                normalized.value,
+                endpoint,
+                timeout=self.settings.network_timeout_seconds,
+            )
+        except NetworkProbeError as exc:
+            self.store.append_audit(
+                engagement_id=engagement_id,
+                action=action,
+                outcome="error",
+                details={"target": normalized.display, "reason": str(exc)},
+            )
+            raise
+        result["security_headers"] = analyze_security_headers(normalized.value, result["headers"])
+        self.store.append_audit(
+            engagement_id=engagement_id,
+            action=action,
+            outcome="allowed",
+            details={
+                "target": normalized.display,
+                "address": endpoint.selected_address,
+                "status": result["status"],
+            },
+        )
+        return {"ok": True, "status": "completed", "probe": result}
+
+    def inspect_tls(
+        self,
+        engagement_id: str,
+        target: str,
+        port: int | None = None,
+    ) -> dict[str, Any]:
+        action = "tls.inspect"
+        engagement, normalized = self.policy.authorize(
+            engagement_id=engagement_id,
+            capability=Capability.INSPECT_TLS,
+            target=target,
+        )
+        try:
+            if port is not None and (not isinstance(port, int) or isinstance(port, bool)):
+                raise ValueError("TLS port must be an integer")
+            if port is not None and not 1 <= port <= 65_535:
+                raise ValueError("TLS port must be between 1 and 65535")
+            if normalized.kind == "url":
+                parsed = urlsplit(normalized.value)
+                host = parsed.hostname or ""
+                if parsed.port is not None and port is not None and parsed.port != port:
+                    raise ValueError("TLS port conflicts with the explicit URL port")
+                selected_port = parsed.port or port or 443
+            elif normalized.kind in {"domain", "ip"}:
+                host = normalized.value
+                selected_port = port or 443
+            else:
+                raise ValueError("TLS inspection requires a URL, domain, or single IP target")
+        except ValueError as exc:
+            self._audit_invalid_input(
+                engagement_id=engagement_id,
+                action=action,
+                target=normalized.display,
+                error=exc,
+            )
+            raise
+        planned = self._check_network_mode(
+            engagement=engagement,
+            normalized=normalized,
+            engagement_id=engagement_id,
+            action=action,
+        )
+        if planned is not None:
+            return planned
+        endpoint = self._resolve_endpoint(
+            engagement_id, action, host, selected_port, normalized.display
+        )
+        return self._execute_tls_probe(engagement_id, normalized, endpoint)
+
+    def _execute_tls_probe(
+        self,
+        engagement_id: str,
+        normalized: NormalizedTarget,
+        endpoint: ResolvedEndpoint,
+    ) -> dict[str, Any]:
+        action = "tls.inspect"
+        try:
+            result = inspect_tls_endpoint(endpoint, timeout=self.settings.network_timeout_seconds)
+        except NetworkProbeError as exc:
+            self.store.append_audit(
+                engagement_id=engagement_id,
+                action=action,
+                outcome="error",
+                details={"target": normalized.display, "reason": str(exc)},
+            )
+            raise
+        self.store.append_audit(
+            engagement_id=engagement_id,
+            action=action,
+            outcome="allowed",
+            details={
+                "target": normalized.display,
+                "address": endpoint.selected_address,
+                "protocol": result["protocol"],
+            },
+        )
+        return {"ok": True, "status": "completed", "inspection": result}
+
+    def probe_tcp_ports(
+        self,
+        engagement_id: str,
+        target: str,
+        ports: list[int],
+    ) -> dict[str, Any]:
+        action = "tcp.probe"
+        engagement, normalized = self.policy.authorize(
+            engagement_id=engagement_id,
+            capability=Capability.PROBE_TCP_PORTS,
+            target=target,
+        )
+        try:
+            if normalized.kind not in {"domain", "ip"}:
+                raise ValueError("TCP probe requires a domain or single IP target")
+            unique_ports = self._validate_ports(ports)
+        except ValueError as exc:
+            self._audit_invalid_input(
+                engagement_id=engagement_id,
+                action=action,
+                target=normalized.display,
+                error=exc,
+            )
+            raise
+        planned = self._check_network_mode(
+            engagement=engagement,
+            normalized=normalized,
+            engagement_id=engagement_id,
+            action=action,
+        )
+        if planned is not None:
+            return planned
+        endpoint = self._resolve_endpoint(
+            engagement_id, action, normalized.value, unique_ports[0], normalized.display
+        )
+        return self._execute_tcp_probe(engagement_id, normalized, unique_ports, endpoint)
+
+    def _execute_tcp_probe(
+        self,
+        engagement_id: str,
+        normalized: NormalizedTarget,
+        unique_ports: list[int],
+        endpoint: ResolvedEndpoint,
+    ) -> dict[str, Any]:
+        action = "tcp.probe"
+        result = probe_tcp_ports(
+            endpoint,
+            unique_ports,
+            timeout=self.settings.network_timeout_seconds,
+            max_ports=self.settings.max_ports,
+        )
+        self.store.append_audit(
+            engagement_id=engagement_id,
+            action=action,
+            outcome="allowed",
+            details={
+                "target": normalized.display,
+                "address": endpoint.selected_address,
+                "requested_ports": unique_ports,
+                "open_ports": result["summary"]["open"],
+            },
+        )
+        return {"ok": True, "status": "completed", "probe": result}
+
+    def _validate_ports(self, ports: list[int]) -> list[int]:
+        if not ports:
+            raise ValueError("at least one TCP port is required")
+        if any(not isinstance(port, int) or isinstance(port, bool) for port in ports):
+            raise ValueError("TCP ports must be integers")
+        unique_ports = sorted(set(ports))
+        if len(unique_ports) > self.settings.max_ports:
+            raise ValueError(f"TCP probe is limited to {self.settings.max_ports} unique ports")
+        if any(not 1 <= port <= 65_535 for port in unique_ports):
+            raise ValueError("TCP ports must be between 1 and 65535")
+        return unique_ports
+
+    def run_posture_assessment(
+        self,
+        engagement_id: str,
+        url_target: str,
+        host_target: str,
+        ports: list[int],
+    ) -> dict[str, Any]:
+        """Run only the fixed bounded probe sequence after a complete preflight."""
+        action = "posture.run"
+        engagement, normalized_url = self.policy.authorize(
+            engagement_id=engagement_id,
+            capability=Capability.RUN_POSTURE_ASSESSMENT,
+            target=url_target,
+        )
+        try:
+            if normalized_url.kind != "url":
+                raise ValueError("posture assessment requires an http or https URL target")
+            self.policy.authorize(
+                engagement_id=engagement_id,
+                capability=Capability.PROBE_HTTP,
+                target=url_target,
+            )
+            _, normalized_host = self.policy.authorize(
+                engagement_id=engagement_id,
+                capability=Capability.PROBE_TCP_PORTS,
+                target=host_target,
+            )
+            if normalized_host.kind not in {"domain", "ip"}:
+                raise ValueError("posture assessment host must be a domain or single IP")
+            parsed = urlsplit(normalized_url.value)
+            if parsed.hostname != normalized_host.value:
+                raise ValueError("URL and host targets must identify the same host")
+            include_tls = parsed.scheme == "https"
+            if include_tls:
+                self.policy.authorize(
+                    engagement_id=engagement_id,
+                    capability=Capability.INSPECT_TLS,
+                    target=url_target,
+                )
+            unique_ports = self._validate_ports(ports)
+        except ValueError as exc:
+            self._audit_invalid_input(
+                engagement_id=engagement_id,
+                action=action,
+                target=normalized_url.display,
+                error=exc,
+            )
+            raise
+        steps = ["probe_tcp_ports"]
+        if include_tls:
+            steps.append("inspect_tls")
+        steps.append("probe_http")
+        if engagement.mode is EngagementMode.DRY_RUN:
+            self.store.append_audit(
+                engagement_id=engagement_id,
+                action=action,
+                outcome="planned",
+                details={
+                    "url_target": normalized_url.display,
+                    "host_target": normalized_host.display,
+                    "ports": unique_ports,
+                    "steps": steps,
+                },
+            )
+            return {
+                "ok": True,
+                "status": "planned",
+                "workflow": "fixed-sequence",
+                "steps": steps,
+                "stop_on_error": True,
+                "dynamic_tool_selection": False,
+                "exploitation": False,
+            }
+        self._check_network_mode(
+            engagement=engagement,
+            normalized=normalized_url,
+            engagement_id=engagement_id,
+            action=action,
+        )
+        http_port = parsed.port or (443 if include_tls else 80)
+        endpoint = self._resolve_endpoint(
+            engagement_id,
+            action,
+            parsed.hostname or "",
+            http_port,
+            normalized_url.display,
+        )
+        completed_steps: list[str] = []
+        results: dict[str, Any] = {}
+        try:
+            results["tcp"] = self._execute_tcp_probe(
+                engagement_id, normalized_host, unique_ports, endpoint
+            )
+            completed_steps.append("probe_tcp_ports")
+            if include_tls:
+                results["tls"] = self._execute_tls_probe(engagement_id, normalized_url, endpoint)
+                completed_steps.append("inspect_tls")
+            results["http"] = self._execute_http_probe(engagement_id, normalized_url, endpoint)
+            completed_steps.append("probe_http")
+        except (ScopeGuardError, ValueError) as exc:
+            self.store.append_audit(
+                engagement_id=engagement_id,
+                action=action,
+                outcome="error",
+                details={
+                    "target": normalized_url.display,
+                    "completed_steps": completed_steps,
+                    "reason": str(exc),
+                },
+            )
+            raise
+        self.store.append_audit(
+            engagement_id=engagement_id,
+            action=action,
+            outcome="allowed",
+            details={
+                "target": normalized_url.display,
+                "completed_steps": completed_steps,
+            },
+        )
+        return {
+            "ok": True,
+            "status": "completed",
+            "workflow": "fixed-sequence",
+            "completed_steps": completed_steps,
+            "stop_on_error": True,
+            "dynamic_tool_selection": False,
+            "exploitation": False,
+            "results": results,
+        }
+
+    def simulate_education(
+        self,
+        engagement_id: str,
+        scenario: str,
+        difficulty: str = "beginner",
+    ) -> dict[str, Any]:
+        """Run a deterministic offline tabletop against the reserved training target."""
+        engagement, _ = self.policy.authorize(
+            engagement_id=engagement_id,
+            capability=Capability.SIMULATE_EDUCATION,
+            target=TRAINING_TARGET,
+        )
+        if engagement.mode is not EngagementMode.DRY_RUN:
+            reason = "education simulation requires a dry-run engagement"
+            self.store.append_audit(
+                engagement_id=engagement_id,
+                action="education.simulate",
+                outcome="denied",
+                details={"target": TRAINING_TARGET, "reason": reason},
+            )
+            raise AuthorizationError(reason)
+        simulation = simulate_training_scenario(scenario, difficulty)
+        self.store.append_audit(
+            engagement_id=engagement_id,
+            action="education.simulate",
+            outcome="allowed",
+            details={
+                "target": TRAINING_TARGET,
+                "scenario": simulation["scenario"],
+                "difficulty": simulation["difficulty"],
+                "phases": len(simulation["phases"]),
+            },
+        )
+        return {"ok": True, "status": "simulated", "simulation": simulation}
 
     def scan_repository(self, engagement_id: str, path: str) -> dict[str, Any]:
         engagement, normalized = self.policy.authorize(
