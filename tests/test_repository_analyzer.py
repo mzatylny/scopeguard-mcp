@@ -64,3 +64,56 @@ def test_repository_scan_supports_single_file_and_invalid_python(tmp_path):
     result = scan_repository(path, max_files=10, max_file_bytes=1_000)
     assert result["scanned_files"] == 1
     assert result["findings"] == []
+
+
+def test_repository_scan_emits_deterministic_evidence(tmp_path):
+    (tmp_path / "a.py").write_text("print('a')\n", encoding="utf-8")
+    (tmp_path / "b.json").write_text('{"safe": true}\n', encoding="utf-8")
+    first = scan_repository(
+        tmp_path,
+        max_files=10,
+        max_file_bytes=1_000,
+        fingerprint_key=b"f" * 32,
+    )
+    second = scan_repository(
+        tmp_path,
+        max_files=10,
+        max_file_bytes=1_000,
+        fingerprint_key=b"f" * 32,
+    )
+    assert first["evidence"] == second["evidence"]
+    assert len(first["evidence"]["manifest_sha256"]) == 64
+    assert len(first["evidence"]["ruleset_sha256"]) == 64
+
+
+def test_repository_scan_enforces_total_bytes_and_finding_limits(tmp_path):
+    (tmp_path / "a.py").write_text("eval(a)\neval(b)\n", encoding="utf-8")
+    (tmp_path / "b.py").write_text("print('b')\n", encoding="utf-8")
+    findings_limited = scan_repository(
+        tmp_path,
+        max_files=10,
+        max_file_bytes=1_000,
+        max_findings=1,
+    )
+    assert findings_limited["summary"]["findings"] == 1
+    assert findings_limited["summary"]["findings_truncated"] is True
+    assert "max_findings" in findings_limited["truncation_reasons"]
+
+    bytes_limited = scan_repository(
+        tmp_path,
+        max_files=10,
+        max_file_bytes=1_000,
+        max_total_bytes=1,
+    )
+    assert bytes_limited["scanned_files"] == 0
+    assert bytes_limited["truncated"] is True
+    assert bytes_limited["truncation_reasons"] == ["max_total_bytes"]
+
+
+def test_repository_scan_never_follows_symlinked_files(tmp_path):
+    outside = tmp_path.parent / "outside-secret.py"
+    outside.write_text('password = "not-for-scopeguard"\n', encoding="utf-8")
+    (tmp_path / "linked.py").symlink_to(outside)
+    result = scan_repository(tmp_path, max_files=10, max_file_bytes=1_000)
+    assert result["scanned_files"] == 0
+    assert result["findings"] == []

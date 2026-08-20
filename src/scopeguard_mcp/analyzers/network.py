@@ -13,6 +13,7 @@ from http.client import HTTPException, HTTPResponse
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from .. import __version__
 from ..errors import AuthorizationError, NetworkProbeError
 
 _SENSITIVE_RESPONSE_HEADERS = frozenset(
@@ -79,6 +80,7 @@ def resolve_allowed_endpoint(
     networks = tuple(ipaddress.ip_network(value) for value in allowed_networks)
     if not networks:
         raise AuthorizationError("SCOPEGUARD_ALLOWED_NETWORKS is empty")
+    addresses: tuple[str, ...]
     if is_ip:
         addresses = (normalized_host,)
     else:
@@ -88,7 +90,7 @@ def resolve_allowed_endpoint(
             )
         except socket.gaierror as exc:
             raise NetworkProbeError("hostname resolution failed") from exc
-        addresses = tuple(dict.fromkeys(answer[4][0] for answer in answers))
+        addresses = tuple(dict.fromkeys(str(answer[4][0]) for answer in answers))
         if not addresses:
             raise NetworkProbeError("hostname resolution returned no addresses")
     if any(
@@ -171,7 +173,7 @@ def probe_http_head(url: str, endpoint: ResolvedEndpoint, *, timeout: float) -> 
     request = (
         f"HEAD {path} HTTP/1.1\r\n"
         f"Host: {_host_header(endpoint.host, endpoint.port, parsed.scheme)}\r\n"
-        "User-Agent: ScopeGuard-MCP/0.2\r\n"
+        f"User-Agent: ScopeGuard-MCP/{__version__}\r\n"
         "Accept: */*\r\n"
         "Connection: close\r\n\r\n"
     ).encode("ascii")
@@ -203,19 +205,32 @@ def inspect_tls_endpoint(endpoint: ResolvedEndpoint, *, timeout: float) -> dict[
     """Validate one TLS handshake and return bounded certificate metadata."""
     connection = _tls_socket(endpoint, timeout)
     try:
-        certificate = connection.getpeercert()
+        certificate = connection.getpeercert() or {}
         certificate_der = connection.getpeercert(binary_form=True) or b""
         cipher = connection.cipher()
+        not_before = certificate.get("notBefore")
+        not_after = certificate.get("notAfter")
+        subject_alt_names: list[str] = []
+        raw_subject_alt_names = certificate.get("subjectAltName", ())
+        if isinstance(raw_subject_alt_names, tuple):
+            for entry in raw_subject_alt_names:
+                if (
+                    isinstance(entry, tuple)
+                    and len(entry) == 2
+                    and entry[0] == "DNS"
+                    and isinstance(entry[1], str)
+                ):
+                    subject_alt_names.append(entry[1])
+                    if len(subject_alt_names) == 20:
+                        break
         return {
             "valid": True,
             "protocol": connection.version(),
             "cipher": cipher[0] if cipher else None,
             "certificate": {
-                "not_before": certificate.get("notBefore"),
-                "not_after": certificate.get("notAfter"),
-                "subject_alt_names": [
-                    value for kind, value in certificate.get("subjectAltName", ()) if kind == "DNS"
-                ][:20],
+                "not_before": not_before if isinstance(not_before, str) else None,
+                "not_after": not_after if isinstance(not_after, str) else None,
+                "subject_alt_names": subject_alt_names,
                 "sha256": hashlib.sha256(certificate_der).hexdigest(),
             },
             "endpoint": endpoint.as_dict(),

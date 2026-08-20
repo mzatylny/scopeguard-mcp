@@ -17,6 +17,10 @@ def _parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("doctor", help="show safety settings and audit health")
     subparsers.add_parser("verify-audit", help="verify the tamper-evident audit chain")
+    subparsers.add_parser(
+        "export-audit-checkpoint",
+        help="export the current signed audit head for external anchoring",
+    )
 
     create = subparsers.add_parser(
         "create-engagement", help="create an operator-authorized engagement"
@@ -50,6 +54,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         result = service.health()
     elif args.command == "verify-audit":
         result = service.verify_audit()
+    elif args.command == "export-audit-checkpoint":
+        result = service.export_audit_checkpoint()
     elif args.command == "create-engagement":
         result = service.create_engagement(
             title=args.title,

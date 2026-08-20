@@ -129,3 +129,35 @@ def test_scope_check_records_result(tmp_path):
     )
     result = policy.scope_check(engagement.id, "other.example")
     assert result["in_scope"] is False
+
+
+def test_scope_check_rejects_expired_or_revoked_engagement(tmp_path):
+    policy = _policy(tmp_path)
+    engagement = policy.create_engagement(
+        title="Review",
+        ticket="SEC-42",
+        targets=["example.com"],
+        capabilities=["plan:assessment"],
+    )
+    policy.store.revoke_engagement(engagement.id)
+    with pytest.raises(AuthorizationError, match="revoked"):
+        policy.scope_check(engagement.id, "example.com")
+
+
+def test_create_engagement_rejects_duplicate_normalized_targets_and_limits(tmp_path):
+    policy = PolicyEngine(Store(tmp_path / "scopeguard.db"), base_dir=tmp_path, max_targets=1)
+    with pytest.raises(ValueError, match="at most 1"):
+        policy.create_engagement(
+            title="Review",
+            ticket="SEC-42",
+            targets=["example.com", "other.example"],
+            capabilities=["plan:assessment"],
+        )
+    policy = _policy(tmp_path / "other")
+    with pytest.raises(ValueError, match="duplicate"):
+        policy.create_engagement(
+            title="Review",
+            ticket="SEC-42",
+            targets=["EXAMPLE.com", "example.com."],
+            capabilities=["plan:assessment"],
+        )

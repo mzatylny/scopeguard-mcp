@@ -140,6 +140,31 @@ def test_network_probe_dry_run_and_dual_operator_gates(tmp_path):
         network_off.probe_http(engagement["id"], "https://example.com/")
 
 
+def test_network_probe_requires_sealed_audit_before_resolution(tmp_path, monkeypatch):
+    settings = replace(
+        _settings(tmp_path, execution_enabled=True, network_enabled=True),
+        require_sealed_audit=True,
+    )
+    service = ScopeGuardService(settings)
+    engagement = _create(
+        service,
+        "https://example.com/",
+        ["probe:http", "audit:read"],
+        mode="execute",
+    )
+    monkeypatch.setattr(
+        service_module,
+        "resolve_allowed_endpoint",
+        lambda *args, **kwargs: pytest.fail("unsealed execution reached DNS resolution"),
+    )
+
+    with pytest.raises(AuthorizationError, match="sealed audit"):
+        service.probe_http(engagement["id"], "https://example.com/")
+
+    events = service.list_audit(engagement["id"])["events"]
+    assert any(event["action"] == "http.probe" and event["outcome"] == "denied" for event in events)
+
+
 def test_http_dry_run_rejects_non_url_and_audits(tmp_path):
     service = ScopeGuardService(_settings(tmp_path))
     engagement = _create(
@@ -447,3 +472,83 @@ def test_education_simulation_rejects_execute_mode_and_real_target_scope(tmp_pat
     real_scope = _create(service, "example.com", ["simulate:education"], mode="dry-run")
     with pytest.raises(AuthorizationError, match="outside engagement scope"):
         service.simulate_education(real_scope["id"], "web-hardening")
+
+
+def test_mcp_revocation_cannot_revoke_operator_execute_engagement(tmp_path):
+    service = ScopeGuardService(_settings(tmp_path, execution_enabled=True))
+    engagement = _create(
+        service,
+        f"file:{tmp_path}",
+        ["scan:repository"],
+        mode="execute",
+    )
+    with pytest.raises(AuthorizationError, match="operator CLI"):
+        service.revoke_dry_run_engagement(engagement["id"])
+    assert service.store.get_engagement(engagement["id"]).status == "active"
+
+
+def test_header_input_limits_and_newlines_are_rejected(tmp_path):
+    settings = replace(_settings(tmp_path), max_headers=1, max_header_bytes=12)
+    service = ScopeGuardService(settings)
+    engagement = _create(
+        service,
+        "https://example.com",
+        ["analyze:headers"],
+    )
+    with pytest.raises(ValueError, match="at most 1"):
+        service.analyze_headers(
+            engagement["id"],
+            "https://example.com",
+            {"a": "1", "b": "2"},
+        )
+    with pytest.raises(ValueError, match="newlines"):
+        service.analyze_headers(
+            engagement["id"],
+            "https://example.com",
+            {"x-test": "safe\r\ninjected: yes"},
+        )
+
+
+def test_execute_scan_requires_and_records_signed_evidence(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "safe.py").write_text("print('safe')\n", encoding="utf-8")
+
+    unsealed_settings = replace(
+        _settings(tmp_path, execution_enabled=True),
+        require_sealed_audit=True,
+    )
+    unsealed_service = ScopeGuardService(unsealed_settings)
+    unsealed = _create(
+        unsealed_service,
+        f"file:{repo}",
+        ["scan:repository"],
+        mode="execute",
+    )
+    assert unsealed_service.health()["execution_ready"] is False
+    with pytest.raises(AuthorizationError, match="sealed audit"):
+        unsealed_service.scan_repository(unsealed["id"], str(repo))
+
+    sealed_state = tmp_path / "sealed-state"
+    sealed_settings = replace(
+        _settings(tmp_path, execution_enabled=True),
+        state_dir=sealed_state,
+        database_path=sealed_state / "scopeguard.db",
+        require_sealed_audit=True,
+        audit_hmac_key=b"s" * 32,
+        audit_key_id="test-key",
+    )
+    sealed_service = ScopeGuardService(sealed_settings)
+    sealed = _create(
+        sealed_service,
+        f"file:{repo}",
+        ["scan:repository", "audit:read"],
+        mode="execute",
+    )
+    completed = sealed_service.scan_repository(sealed["id"], str(repo))
+    assert completed["status"] == "completed"
+    assert completed["scan_id"]
+    assert sealed_service.health()["execution_ready"] is True
+    runs = sealed_service.list_scan_runs(sealed["id"])["runs"]
+    assert runs[0]["id"] == completed["scan_id"]
+    assert runs[0]["manifest_sha256"] == completed["analysis"]["evidence"]["manifest_sha256"]

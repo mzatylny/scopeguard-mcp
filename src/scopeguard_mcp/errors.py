@@ -23,3 +23,7 @@ class AuthorizationError(ScopeGuardError):
 
 class NetworkProbeError(ScopeGuardError):
     """Raised when a bounded network probe cannot be completed safely."""
+
+
+class AnalysisError(ScopeGuardError):
+    """Raised when a bounded analyzer cannot complete safely."""

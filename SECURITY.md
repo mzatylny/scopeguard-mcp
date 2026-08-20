@@ -2,8 +2,7 @@
 
 ## Supported versions
 
-ScopeGuard is currently pre-1.0. Security fixes are applied to the latest release and the
-default branch.
+Security fixes are applied to the latest 1.x release and the default branch.
 
 ## Reporting a vulnerability
 
@@ -23,29 +22,37 @@ The primary controls are:
 - stdio-only transport
 - MCP-created engagements forced to dry-run
 - operator-only execute engagement creation
+- operator-only revocation of execute engagements
 - a second environment-controlled execution gate
 - an independent network execution gate
+- an optional mandatory HMAC-sealed audit gate for every execute operation
 - expiring capability grants
 - canonical target and path scope checks
-- symlink resolution and operator root allowlists
-- bounded file count and file size
+- operator root allowlists and no-follow file opening on supported POSIX platforms
+- bounded file count, file size, total bytes, findings, targets, and header input
 - hostname plus resolved-address network allowlists
 - fixed HTTP HEAD, TLS handshake, and connect-only TCP probes with strict limits
 - fixed-sequence posture orchestration with full preflight, one pinned DNS result, and
   fail-closed execution
 - offline education simulation restricted to dry-run mode and `training.invalid`
 - no arbitrary subprocess, shell, request, exploit, password, payload, or dynamic-code tool
-- redacted secret findings
-- tamper-evident audit verification
+- HMAC-fingerprinted secret findings with raw values excluded
+- durable scan manifests and ruleset digests
+- hash-chained events plus an HMAC-sealed audit checkpoint
 
 ## Known limitations
 
-- The audit chain lives in the same local trust domain as the database. An administrator
-  who can replace the whole database can create a new chain. Export signed audit heads to
-  an external system for stronger non-repudiation.
+- The first seal of a database can attest only to the state visible at migration time.
+  Export each later signed head to an external append-only system to detect full database
+  rollback or replacement.
+- Key rotation is an operator procedure: archive the last externally anchored checkpoint,
+  start a fresh state database with the new key, and retain both evidence sets. In-place
+  silent key replacement intentionally fails closed.
 - The built-in scanner is a focused baseline, not a replacement for Semgrep, CodeQL,
   Gitleaks, Trivy, or professional review.
-- File scanning trusts the local operating system's discretionary access controls.
+- File scanning relies on the local operating system's discretionary access controls.
+  Platforms without relative no-follow file opening receive a stricter best-effort path
+  check but not the same race resistance as supported POSIX systems.
 - HTTP probing intentionally does not follow redirects, send bodies, or support
   authentication. TLS probing requires a certificate-validating handshake.
 - TCP results distinguish only `open` from `closed-or-filtered`; they do not identify

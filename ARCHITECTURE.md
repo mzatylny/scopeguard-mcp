@@ -3,26 +3,28 @@
 ```mermaid
 flowchart LR
     A["MCP client"] --> B["MCP v2 stdio server"]
-    O["Operator CLI and environment"] --> C["Policy engine"]
+    OP["Operator CLI and environment"] --> C["Policy engine"]
     B --> C
     C --> D["Scope normalizer"]
     C --> E["Capability and expiry checks"]
     C --> F["Dual execution gate"]
-    C --> K["Network execution gate"]
-    K --> L["Host plus CIDR allowlists"]
-    L --> N["Fixed fail-closed posture workflow"]
+    C --> NG["Network execution gate"]
+    NG --> NA["Host plus CIDR allowlists"]
+    NA --> PW["Fixed fail-closed posture workflow"]
     D --> G["Offline header analyzer"]
     F --> H["Read-only repository analyzer"]
-    L --> M["Bounded HTTP, TLS, and TCP probes"]
+    NA --> NP["Bounded HTTP, TLS, and TCP probes"]
     C --> I[("SQLite engagements")]
     C --> J[("Hash-chained audit events")]
+    H --> SR[("Durable scan runs")]
+    J --> AS["HMAC-sealed checkpoint"]
     G --> J
     H --> J
-    M --> J
-    N --> M
-    N --> J
-    B --> O["Offline education simulator"]
-    O --> J
+    NP --> J
+    PW --> NP
+    PW --> J
+    B --> T["Offline education simulator"]
+    T --> J
 ```
 
 ## Trust boundaries
@@ -31,10 +33,12 @@ flowchart LR
    create execute engagements.
 2. The local operator controls execute engagements through the CLI and separately sets
    `SCOPEGUARD_EXECUTION_ENABLED=true` when starting the server.
+   MCP callers cannot revoke an operator-created execute engagement.
 3. Every target operation requires an active, unexpired engagement, a matching
    capability, and deterministic target-scope membership.
-4. Repository paths must also be under an operator-configured allowed root. Paths and
-   symlinks are resolved before the check.
+4. Repository paths must also be under an operator-configured allowed root. Paths are
+   canonicalized before authorization and files are opened without following symlink
+   components on supported POSIX platforms.
 5. Network probes require the execute gate, a separate network gate, exact or wildcard
    hostname approval, and approval for every resolved IP address. Connections use the
    approved address directly to reduce DNS-rebinding risk.
@@ -54,18 +58,34 @@ flowchart LR
    traversal; canonicalizes domains, IPs, CIDRs, and local paths; then compares scope.
 4. Authorization success or failure is appended to the global audit chain.
 5. Offline analysis runs only after authorization. Repository analysis additionally
-   checks both execution gates and operator roots. Network probes additionally check the
-   network gate and both operator allowlists.
-6. Results return structured data. Secret matches are replaced by one-way fingerprints.
-7. The audit chain can be recomputed from genesis to detect modified or reordered rows.
+   checks the execution gate and operator roots. Network probes additionally check the
+   network gate and both operator allowlists. Every execute path also requires a valid
+   sealed audit checkpoint when that operator policy is enabled.
+6. Results return structured data. Secret matches are replaced by keyed HMAC
+   fingerprints, while file content is represented by a deterministic manifest digest.
+7. The scan outcome and evidence digests are persisted before the completion event is
+   appended to the audit chain.
+8. The event chain is recomputed from genesis and compared with its durable checkpoint.
+   When an audit key is configured, the checkpoint signature is verified in constant
+   time.
 
 ## Persistence
 
 SQLite uses WAL mode, foreign-key enforcement, and a busy timeout. Engagements and audit
-events share one database so the CLI and MCP server can safely coordinate. Each audit
-event hashes canonical JSON together with the previous event hash. This detects mutation,
-deletion from the middle, and reordering; it does not replace external log replication or
-cryptographic signing by a separate trust domain.
+events and scan runs share one database so the CLI and MCP server can safely coordinate.
+Each audit event hashes canonical JSON together with the previous event hash. The event
+count and chain head are stored in an HMAC-sealed checkpoint. This detects row mutation,
+reordering, middle deletion, and tail truncation while the signing key remains outside the
+database. Exporting the signed head to a separate append-only system provides a stronger
+cross-system anchor.
+
+## Resource model
+
+The analyzer enforces independent ceilings for file count, per-file bytes, total bytes,
+and returned findings. Header analysis has count and total-byte limits and rejects newline
+characters. Network checks enforce bounded timeouts and port counts and operate on one
+host at a time. Engagement metadata has bounded field lengths and a bounded target count.
+Truncation is explicit in results and scan evidence.
 
 ## Extension rule
 

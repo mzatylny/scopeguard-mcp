@@ -1,55 +1,90 @@
 # ScopeGuard MCP
 
 [![CI](https://github.com/mzatylny/scopeguard-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/mzatylny/scopeguard-mcp/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/mzatylny/scopeguard-mcp/actions/workflows/codeql.yml/badge.svg)](https://github.com/mzatylny/scopeguard-mcp/actions/workflows/codeql.yml)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![MCP](https://img.shields.io/badge/MCP-2.0-purple.svg)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 ScopeGuard is a policy-first defensive security and bounded posture-testing server for
-MCP. It gives AI clients useful repository, HTTP, TLS, and single-host TCP analysis while
-keeping authorization, execution, target scope, and auditability under operator control.
+MCP. It lets AI clients plan assessments, evaluate web security headers, scan explicitly
+authorized local source trees, and run guarded HTTP, TLS, and single-host TCP checks
+without exposing a general shell, unrestricted network scanner, exploit generator, or
+credential tool.
 
-It is designed as a safer, maintainable alternative to broad shell-driven pentest
-orchestrators. “Better” here means stronger trust boundaries and engineering quality—not
-more autonomous exploitation.
+The project demonstrates senior security-engineering concerns beyond rule detection:
+authorization boundaries, canonical scope evaluation, dual execution gates, bounded
+resource use, evidence integrity, secure file access, durable audit history, threat
+modeling, supply-chain controls, and negative testing.
 
-The comparison below uses the public
-[HexStrike AI v6 repository](https://github.com/0x4m4/hexstrike-ai) as the reference
-baseline. ScopeGuard is built on the
-[official MCP Python SDK 2.x](https://github.com/modelcontextprotocol/python-sdk).
+## Security guarantees
 
-## Why ScopeGuard
+- MCP clients can create only short-lived `dry-run` engagements.
+- Execute engagements are created and revoked only through the local operator CLI.
+- Every target operation requires an active engagement, an explicit capability, and a
+  canonical target that matches scope.
+- Execute operations require an operator-created execute engagement and the
+  operator-controlled `SCOPEGUARD_EXECUTION_ENABLED` gate. Network probes also require
+  their independent network gate and host/address allowlists.
+- Production execution can require an HMAC-sealed audit checkpoint. Every execute path
+  fails closed when a required seal is missing or invalid.
+- File traversal is bounded by file count, file size, total bytes, and finding count.
+- Repository files are opened as regular files without following symlink components on
+  supported POSIX platforms, reducing path-race exposure.
+- Secret matches are never returned. Correlation fingerprints use keyed HMAC rather than
+  a guessable unsalted digest.
+- Completed scans persist a manifest digest, ruleset digest, timestamps, outcome, and
+  summary so evidence can be correlated with the audit chain.
+- The server uses local stdio only. It does not expose an unauthenticated network port.
 
-| Boundary | ScopeGuard | HexStrike AI v6 reference inspected |
+These controls do not prove that a ticket represents legal authorization. The operator is
+still responsible for validating permission and exporting signed audit heads to a separate
+trust domain.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    A["Untrusted MCP client"] --> B["Typed stdio tools"]
+    O["Operator CLI + environment"] --> C["Policy engine"]
+    B --> C
+    C --> D["Canonical scope matcher"]
+    C --> E["Capability + expiry gate"]
+    C --> F["Dual execution gate"]
+    F --> G["Bounded repository analyzer"]
+    F --> M["Network gate + allowlists"]
+    M --> N["Pinned bounded probes"]
+    C --> H["Offline header analyzer"]
+    C --> P["Offline training simulator"]
+    C --> I[("SQLite engagements")]
+    G --> J[("Durable scan evidence")]
+    C --> K[("Hash-chained audit events")]
+    K --> L["HMAC-sealed checkpoint"]
+```
+
+See [ARCHITECTURE.md](ARCHITECTURE.md),
+[the threat model](docs/THREAT_MODEL.md), and
+[the operations runbook](docs/OPERATIONS.md) for the detailed design.
+
+## MCP tools
+
+| Tool | Purpose | Boundary |
 |---|---|---|
-| Protocol | Official MCP Python SDK 2.x | FastMCP dependency below 1.0 |
-| Architecture | Small modules with explicit domain boundaries | Two main Python scripts totaling about 22k lines |
-| Client transport | Local stdio only | MCP client plus local Flask execution API |
-| Authorization | Expiring engagements, target scopes, capabilities | Caller-supplied targets sent to execution endpoints |
-| Execution | Operator-created execute engagement **and** server-side environment gate | Tool call can directly launch commands |
-| Process control | Fixed built-in analyzers and bounded probes; no arbitrary shell | Broad subprocess wrappers |
-| Audit | SQLite WAL plus a verifiable SHA-256 hash chain | Conventional logs |
-| Secret handling | Findings are fingerprinted; matched values are never returned | Tool output may contain raw secrets |
-| Quality | CI matrix, linting, packaging, 90% coverage floor | No test or CI suite visible in the inspected tree |
-
-ScopeGuard does not include exploit generation, password attacks, payload generation,
-credential capture, or autonomous attack-chain execution.
-
-## Included tools
-
-- `health` — safety posture, supported capabilities, and audit-chain status
-- `create_dry_run_engagement` — create an expiring, non-executing scope from MCP
-- `revoke_engagement` — stop an engagement immediately
-- `check_scope` — normalize and evaluate a URL, domain, IP/CIDR, or file target
-- `plan_assessment` — produce a bounded web or repository baseline plan
-- `analyze_headers` — inspect caller-supplied HTTP headers without making a request
-- `scan_repository` — read-only built-in Python risk and secret checks
-- `probe_http` — make one allowlisted HEAD request without credentials or redirects
-- `inspect_tls` — validate one allowlisted TLS handshake and inspect its certificate
-- `probe_tcp_ports` — bounded TCP connects to one allowlisted host without banner capture
-- `run_posture_assessment` — run the fixed TCP → TLS → HTTP posture workflow
-- `simulate_education_scenario` — run an offline defensive tabletop on `training.invalid`
-- `list_audit_events` and `verify_audit_chain` — inspect and verify evidence
+| `health` | Report safety posture and audit integrity | No target access |
+| `create_dry_run_engagement` | Create a bounded non-executing scope | Execute mode is unavailable |
+| `revoke_engagement` | Revoke an MCP-created dry-run engagement | Cannot revoke operator execute grants |
+| `check_scope` | Normalize and evaluate a target | Active engagement required |
+| `plan_assessment` | Produce a bounded web or repository plan | No network or process execution |
+| `analyze_headers` | Inspect caller-supplied response headers | Offline and input-bounded |
+| `scan_repository` | Run read-only Python and secret checks | Execute grant, environment gate, and audit policy |
+| `probe_http` | Make one allowlisted HTTP HEAD request | No body, credentials, or redirects |
+| `inspect_tls` | Validate one allowlisted TLS handshake | Certificate validation is mandatory |
+| `probe_tcp_ports` | Connect to bounded ports on one allowlisted host | No banners or application data |
+| `run_posture_assessment` | Run the fixed TCP → TLS → HTTP workflow | Fully preflighted; stops on first error |
+| `simulate_education_scenario` | Run a defensive tabletop | Offline, dry-run, and `training.invalid` only |
+| `list_audit_events` | Read engagement-specific evidence | Requires `audit:read` |
+| `list_scan_runs` | Read durable scan manifests and outcomes | Requires `audit:read` |
+| `verify_audit_chain` | Verify event order and the signed head | Does not reveal signing material |
 
 ## Quick start
 
@@ -65,7 +100,7 @@ scopeguard doctor
 scopeguard-mcp
 ```
 
-Configure an MCP client to launch the local stdio server:
+Example MCP client configuration:
 
 ```json
 {
@@ -80,18 +115,19 @@ Configure an MCP client to launch the local stdio server:
 }
 ```
 
-## Authorization workflow
+## Authorized execution workflow
 
-MCP clients can create only `dry-run` engagements. They can check scope, build plans,
-and perform offline header analysis, but repository execution remains planned.
-
-For a real read-only repository scan, the operator must create an execute engagement
-outside the model and launch the server with execution enabled:
+Generate and store a random audit key in your secret manager. Do not commit it or place it
+in shell history. Then configure a dedicated state directory and the smallest possible
+repository root:
 
 ```bash
 export SCOPEGUARD_STATE_DIR=/absolute/path/to/scopeguard-state
 export SCOPEGUARD_ALLOWED_ROOTS=/absolute/path/to/authorized-repositories
 export SCOPEGUARD_EXECUTION_ENABLED=true
+export SCOPEGUARD_REQUIRE_SEALED_AUDIT=true
+export SCOPEGUARD_AUDIT_HMAC_KEY='value-loaded-from-your-secret-manager'
+export SCOPEGUARD_AUDIT_KEY_ID='primary-2026'
 
 scopeguard create-engagement \
   --title "Repository security baseline" \
@@ -105,9 +141,16 @@ scopeguard create-engagement \
 scopeguard-mcp
 ```
 
-The returned engagement ID is required by `scan_repository`. Both the engagement file
-scope and `SCOPEGUARD_ALLOWED_ROOTS` must contain the requested path. Symlinks are
-resolved before either policy is evaluated.
+Export the signed audit head after an assessment and anchor it in an append-only external
+system:
+
+```bash
+scopeguard verify-audit
+scopeguard export-audit-checkpoint > scopeguard-audit-head.json
+```
+
+The checkpoint contains only the event count, chain head, key identifier, and HMAC
+signature. It never includes the signing key.
 
 ### Bounded network posture testing
 
@@ -120,6 +163,9 @@ two-part rule prevents a permitted name from resolving to an unexpected address.
 export SCOPEGUARD_STATE_DIR=/absolute/path/to/scopeguard-state
 export SCOPEGUARD_EXECUTION_ENABLED=true
 export SCOPEGUARD_NETWORK_ENABLED=true
+export SCOPEGUARD_REQUIRE_SEALED_AUDIT=true
+export SCOPEGUARD_AUDIT_HMAC_KEY='value-loaded-from-your-secret-manager'
+export SCOPEGUARD_AUDIT_KEY_ID='primary-2026'
 export SCOPEGUARD_ALLOWED_HOSTS=staging.example.com,*.staging.example.com
 export SCOPEGUARD_ALLOWED_NETWORKS=192.0.2.0/24,2001:db8::/32
 
@@ -186,25 +232,33 @@ events, defensive signals, learner questions, and defensive response actions.
 
 | Capability | Allows |
 |---|---|
-| `plan:assessment` | Bounded web/repository planning for an in-scope target |
+| `plan:assessment` | Bounded web or repository planning for an in-scope target |
 | `analyze:headers` | Offline analysis of supplied HTTP headers |
-| `scan:repository` | Built-in read-only scan, subject to both execution gates |
+| `scan:repository` | Built-in read-only scanning under the execution and audit gates |
 | `probe:http` | One allowlisted, no-redirect HTTP HEAD request |
 | `inspect:tls` | One allowlisted, certificate-validating TLS handshake |
 | `probe:tcp-ports` | Bounded connect-only TCP checks against one host |
 | `run:posture-assessment` | Fixed, fail-closed orchestration of the bounded probes |
 | `simulate:education` | Offline defensive tabletop locked to `training.invalid` |
-| `audit:read` | Reading engagement-specific audit events |
+| `audit:read` | Engagement audit events and durable scan-run evidence |
 
 ## Configuration
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SCOPEGUARD_STATE_DIR` | `<cwd>/.scopeguard` | SQLite state and audit database |
+| `SCOPEGUARD_STATE_DIR` | `<cwd>/.scopeguard` | Private SQLite state directory |
 | `SCOPEGUARD_ALLOWED_ROOTS` | current directory | Path-separated operator allowlist |
-| `SCOPEGUARD_EXECUTION_ENABLED` | `false` | Enables execute engagements when `true` |
-| `SCOPEGUARD_MAX_FILES` | `5000` | Repository scan file ceiling |
+| `SCOPEGUARD_EXECUTION_ENABLED` | `false` | Enables operator-created execute engagements |
+| `SCOPEGUARD_REQUIRE_SEALED_AUDIT` | `true` in execute mode | Fails execution closed without a verified audit seal |
+| `SCOPEGUARD_AUDIT_HMAC_KEY` | unset | At least 32 bytes; signs the durable audit checkpoint |
+| `SCOPEGUARD_AUDIT_KEY_ID` | key fingerprint | Non-secret identifier used for rotation tracking |
+| `SCOPEGUARD_MAX_TARGETS` | `25` | Engagement target ceiling |
+| `SCOPEGUARD_MAX_HEADERS` | `100` | Offline header count ceiling |
+| `SCOPEGUARD_MAX_HEADER_BYTES` | `32768` | Total header input ceiling |
+| `SCOPEGUARD_MAX_FILES` | `5000` | Repository file ceiling |
 | `SCOPEGUARD_MAX_FILE_BYTES` | `1000000` | Per-file read ceiling |
+| `SCOPEGUARD_MAX_TOTAL_BYTES` | `50000000` | Total repository read ceiling |
+| `SCOPEGUARD_MAX_FINDINGS` | `2000` | Returned finding ceiling |
 | `SCOPEGUARD_NETWORK_ENABLED` | `false` | Independently enables bounded network probes |
 | `SCOPEGUARD_ALLOWED_HOSTS` | empty | Comma-separated exact or `*.` hostname allowlist |
 | `SCOPEGUARD_ALLOWED_NETWORKS` | empty | Comma-separated IP/CIDR allowlist |
@@ -223,35 +277,53 @@ exploit or payload generation, persistence, evasion, denial of service, CIDR-wid
 or autonomous attack chains. The fixed posture runner is defensive orchestration, not an
 attack agent; these exclusions are trust boundaries, not missing tools.
 
-## Repository analyzer
+## Repository analysis
 
-The dependency-free analyzer currently detects:
+The dependency-free analyzer detects focused high-signal patterns:
 
-- Python `eval` / `exec`
-- `os.system` / `os.popen`
+- Python `eval` and `exec`
+- `os.system` and `os.popen`
 - `subprocess` calls with `shell=True`
 - unsafe Pickle deserialization
 - `yaml.load` without a safe loader
 - private-key blocks, AWS access keys, GitHub tokens, and likely hard-coded secrets
 
-Secret values are never returned. Findings contain only rule metadata, location, and a
-short one-way fingerprint for correlation.
+Results include a deterministic file-manifest SHA-256 and ruleset SHA-256. Secret values
+are excluded from results, audit events, and scan records. This scanner is a bounded
+baseline, not a replacement for CodeQL, Semgrep, Gitleaks, dependency auditing, or expert
+review.
 
-## Development
+## Engineering quality
+
+The repository includes:
+
+- Python 3.11–3.13 tests with a 90% coverage floor
+- Ruff lint and format verification
+- static type analysis with complete function signatures
+- Bandit and dependency vulnerability scanning
+- CodeQL analysis on pushes, pull requests, and a weekly schedule
+- package build and metadata verification
+- tagged release artifacts with an SBOM and GitHub build-provenance attestation
+- Dependabot for Python and GitHub Actions dependencies
+- architecture, threat-model, ADR, operations, contribution, and security documents
+
+Local verification:
 
 ```bash
+python -m pip install --upgrade pip
 pip install -e ".[dev]"
 ruff check .
+ruff format --check .
+mypy src/scopeguard_mcp
+bandit -q -r src
 pytest
 python -m build
+twine check dist/*
 ```
-
-The test suite includes a real in-memory MCP v2 discovery and tool-call round trip.
-
-See [ARCHITECTURE.md](ARCHITECTURE.md), [SECURITY.md](SECURITY.md), and
-[CONTRIBUTING.md](CONTRIBUTING.md) for design and project policy.
 
 ## Responsible use
 
 Use ScopeGuard only on repositories and systems you own or are explicitly authorized to
-assess. The project is defensive tooling, not authorization to test a target.
+assess. The project intentionally excludes exploit generation, password attacks,
+credential collection, payload generation, persistence, evasion, denial of service,
+internet-scale scanning, and autonomous attack chains.
