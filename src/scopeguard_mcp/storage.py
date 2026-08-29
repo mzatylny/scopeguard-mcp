@@ -8,6 +8,8 @@ import json
 import os
 import sqlite3
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -48,17 +50,22 @@ class Store:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.database_path, timeout=5.0)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA busy_timeout=5000")
         try:
-            os.chmod(self.database_path, 0o600)
-        except OSError:
-            pass
-        return connection
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA busy_timeout=5000")
+            try:
+                os.chmod(self.database_path, 0o600)
+            except OSError:
+                pass
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def _initialize(self) -> None:
         with self._connect() as connection:
@@ -123,7 +130,7 @@ class Store:
         row = connection.execute("SELECT * FROM audit_checkpoint WHERE singleton=1").fetchone()
         if row is not None:
             if self.audit_hmac_key and row["signature"] is None:
-                signature = _checkpoint_signature(
+                checkpoint_signature = _checkpoint_signature(
                     self.audit_hmac_key,
                     event_count=int(row["event_count"]),
                     head_hash=row["head_hash"],
@@ -131,7 +138,7 @@ class Store:
                 )
                 connection.execute(
                     "UPDATE audit_checkpoint SET key_id=?, signature=? WHERE singleton=1",
-                    (self.audit_key_id, signature),
+                    (self.audit_key_id, checkpoint_signature),
                 )
             return
         last = connection.execute(
@@ -280,7 +287,9 @@ class Store:
                     digest,
                 ),
             )
-            sequence = int(cursor.lastrowid)
+            if cursor.lastrowid is None:
+                raise sqlite3.DatabaseError("audit event insert did not return a sequence")
+            sequence = cursor.lastrowid
             next_count = event_count + 1
             signature = (
                 _checkpoint_signature(

@@ -48,7 +48,10 @@ def _safe_call(operation: Callable[[], dict[str, Any]]) -> dict[str, Any]:
 @mcp.tool(
     title="ScopeGuard health",
     annotations=ToolAnnotations(
-        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+        read_only_hint=True,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
     ),
 )
 def health() -> dict[str, Any]:
@@ -59,7 +62,10 @@ def health() -> dict[str, Any]:
 @mcp.tool(
     title="Create dry-run engagement",
     annotations=ToolAnnotations(
-        readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=False,
+        open_world_hint=False,
     ),
 )
 def create_dry_run_engagement(
@@ -85,7 +91,10 @@ def create_dry_run_engagement(
 @mcp.tool(
     title="Revoke engagement",
     annotations=ToolAnnotations(
-        readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False
+        read_only_hint=False,
+        destructive_hint=True,
+        idempotent_hint=False,
+        open_world_hint=False,
     ),
 )
 def revoke_engagement(engagement_id: str) -> dict[str, Any]:
@@ -96,7 +105,10 @@ def revoke_engagement(engagement_id: str) -> dict[str, Any]:
 @mcp.tool(
     title="Check target scope",
     annotations=ToolAnnotations(
-        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+        read_only_hint=True,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
     ),
 )
 def check_scope(engagement_id: str, target: str) -> dict[str, Any]:
@@ -107,7 +119,10 @@ def check_scope(engagement_id: str, target: str) -> dict[str, Any]:
 @mcp.tool(
     title="Plan defensive assessment",
     annotations=ToolAnnotations(
-        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+        read_only_hint=True,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
     ),
 )
 def plan_assessment(engagement_id: str, target: str, profile: str = "baseline") -> dict[str, Any]:
@@ -118,7 +133,10 @@ def plan_assessment(engagement_id: str, target: str, profile: str = "baseline") 
 @mcp.tool(
     title="Analyze HTTP security headers",
     annotations=ToolAnnotations(
-        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+        read_only_hint=True,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
     ),
 )
 def analyze_headers(engagement_id: str, target: str, headers: dict[str, str]) -> dict[str, Any]:
@@ -129,7 +147,10 @@ def analyze_headers(engagement_id: str, target: str, headers: dict[str, str]) ->
 @mcp.tool(
     title="Scan authorized local repository",
     annotations=ToolAnnotations(
-        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+        read_only_hint=True,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
     ),
 )
 def scan_repository(engagement_id: str, path: str) -> dict[str, Any]:
@@ -140,7 +161,10 @@ def scan_repository(engagement_id: str, path: str) -> dict[str, Any]:
 @mcp.tool(
     title="Read engagement audit events",
     annotations=ToolAnnotations(
-        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+        read_only_hint=True,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
     ),
 )
 def list_audit_events(engagement_id: str, limit: int = 100) -> dict[str, Any]:
@@ -151,7 +175,10 @@ def list_audit_events(engagement_id: str, limit: int = 100) -> dict[str, Any]:
 @mcp.tool(
     title="Verify audit chain",
     annotations=ToolAnnotations(
-        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+        read_only_hint=True,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
     ),
 )
 def verify_audit_chain() -> dict[str, Any]:
@@ -162,7 +189,10 @@ def verify_audit_chain() -> dict[str, Any]:
 @mcp.tool(
     title="Read repository scan evidence",
     annotations=ToolAnnotations(
-        readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+        read_only_hint=True,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
     ),
 )
 def list_scan_runs(engagement_id: str, limit: int = 100) -> dict[str, Any]:

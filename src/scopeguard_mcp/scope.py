@@ -36,10 +36,10 @@ def normalize_target(raw: str, *, base_dir: Path | None = None) -> NormalizedTar
         path_value = unquote(value[5:])
         if path_value.startswith("//"):
             path_value = path_value[2:]
-        path = Path(path_value).expanduser()
-        if not path.is_absolute():
-            path = (base_dir or Path.cwd()) / path
-        resolved = path.resolve(strict=False)
+        file_path = Path(path_value).expanduser()
+        if not file_path.is_absolute():
+            file_path = (base_dir or Path.cwd()) / file_path
+        resolved = file_path.resolve(strict=False)
         return NormalizedTarget("file", str(resolved), f"file:{resolved}")
 
     if "://" in value:
@@ -51,9 +51,9 @@ def normalize_target(raw: str, *, base_dir: Path | None = None) -> NormalizedTar
         if parsed.hostname.startswith("*."):
             raise InvalidTargetError("wildcards are supported only as domain targets")
         if _is_ip(parsed.hostname):
-            address = ipaddress.ip_address(parsed.hostname)
-            host = str(address)
-            authority_host = f"[{host}]" if address.version == 6 else host
+            ip_address = ipaddress.ip_address(parsed.hostname)
+            host = str(ip_address)
+            authority_host = f"[{host}]" if ip_address.version == 6 else host
         else:
             host = _normalize_domain(parsed.hostname)
             authority_host = host
@@ -64,9 +64,9 @@ def normalize_target(raw: str, *, base_dir: Path | None = None) -> NormalizedTar
         default_port = 80 if parsed.scheme.lower() == "http" else 443
         authority = authority_host if port in {None, default_port} else f"{authority_host}:{port}"
         decoded_path = unquote(parsed.path or "/")
-        path = posixpath.normpath("/" + decoded_path.lstrip("/"))
-        path = quote(path, safe="/:@-._~!$&'()*+,;=")
-        normalized = urlunsplit((parsed.scheme.lower(), authority, path, "", ""))
+        normalized_path = posixpath.normpath("/" + decoded_path.lstrip("/"))
+        normalized_path = quote(normalized_path, safe="/:@-._~!$&'()*+,;=")
+        normalized = urlunsplit((parsed.scheme.lower(), authority, normalized_path, "", ""))
         return NormalizedTarget("url", normalized, normalized)
 
     try:
@@ -77,8 +77,8 @@ def normalize_target(raw: str, *, base_dir: Path | None = None) -> NormalizedTar
     if "/" in value:
         canonical = str(network)
         return NormalizedTarget("network", canonical, canonical)
-    address = str(network.network_address)
-    return NormalizedTarget("ip", address, address)
+    canonical_address = str(network.network_address)
+    return NormalizedTarget("ip", canonical_address, canonical_address)
 
 
 def _is_ip(value: str) -> bool:
