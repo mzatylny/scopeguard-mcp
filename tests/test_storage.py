@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -54,7 +55,7 @@ def test_audit_chain_round_trip_and_tamper_detection(tmp_path):
     assert [event["action"] for event in events] == ["two", "one"]
     assert store.verify_audit_chain()["valid"] is True
 
-    with sqlite3.connect(database_path) as connection:
+    with closing(sqlite3.connect(database_path)) as connection, connection:
         connection.execute(
             "UPDATE audit_events SET details_json=? WHERE sequence=1", ('{"safe":false}',)
         )
@@ -82,7 +83,7 @@ def test_signed_checkpoint_detects_tail_deletion_and_blocks_append(tmp_path):
     assert verification["sealed"] is True
     assert verification["signature_verified"] is True
 
-    with sqlite3.connect(database_path) as connection:
+    with closing(sqlite3.connect(database_path)) as connection, connection:
         connection.execute("DELETE FROM audit_events WHERE sequence=2")
     verification = store.verify_audit_chain()
     assert verification["valid"] is False
