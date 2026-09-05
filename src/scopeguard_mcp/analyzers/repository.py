@@ -233,9 +233,12 @@ def _read_regular_file_beneath(
     no_follow = getattr(os, "O_NOFOLLOW", 0)
     close_on_exec = getattr(os, "O_CLOEXEC", 0)
     directory_flag = getattr(os, "O_DIRECTORY", 0)
+    nonblocking = getattr(os, "O_NONBLOCK", 0)
     file_descriptor: int | None = None
     directory_descriptors: list[int] = []
     try:
+        if not stat.S_ISREG(path.lstat().st_mode):
+            return None, "not_regular"
         can_open_relative = root.is_dir() and os.open in os.supports_dir_fd and bool(no_follow)
         if can_open_relative:
             relative = path.relative_to(root)
@@ -255,7 +258,7 @@ def _read_regular_file_beneath(
                 directory_descriptors.append(directory_descriptor)
             file_descriptor = os.open(
                 relative.parts[-1],
-                os.O_RDONLY | close_on_exec | no_follow,
+                os.O_RDONLY | close_on_exec | no_follow | nonblocking,
                 dir_fd=directory_descriptor,
             )
         else:
@@ -264,7 +267,9 @@ def _read_regular_file_beneath(
                 return None, "outside_root"
             if path.is_symlink():
                 return None, "symlink"
-            file_descriptor = os.open(resolved, os.O_RDONLY | close_on_exec | no_follow)
+            file_descriptor = os.open(
+                resolved, os.O_RDONLY | close_on_exec | no_follow | nonblocking
+            )
 
         metadata = os.fstat(file_descriptor)
         if not stat.S_ISREG(metadata.st_mode):

@@ -64,9 +64,9 @@ def normalize_target(raw: str, *, base_dir: Path | None = None) -> NormalizedTar
         default_port = 80 if parsed.scheme.lower() == "http" else 443
         authority = authority_host if port in {None, default_port} else f"{authority_host}:{port}"
         decoded_path = unquote(parsed.path or "/")
-        path = posixpath.normpath("/" + decoded_path.lstrip("/"))
-        path = quote(path, safe="/:@-._~!$&'()*+,;=")
-        normalized = urlunsplit((parsed.scheme.lower(), authority, path, "", ""))
+        url_path = posixpath.normpath("/" + decoded_path.lstrip("/"))
+        url_path = quote(url_path, safe="/:@-._~!$&'()*+,;=")
+        normalized = urlunsplit((parsed.scheme.lower(), authority, url_path, "", ""))
         return NormalizedTarget("url", normalized, normalized)
 
     try:
@@ -77,8 +77,8 @@ def normalize_target(raw: str, *, base_dir: Path | None = None) -> NormalizedTar
     if "/" in value:
         canonical = str(network)
         return NormalizedTarget("network", canonical, canonical)
-    address = str(network.network_address)
-    return NormalizedTarget("ip", address, address)
+    ip_value = str(network.network_address)
+    return NormalizedTarget("ip", ip_value, ip_value)
 
 
 def _is_ip(value: str) -> bool:

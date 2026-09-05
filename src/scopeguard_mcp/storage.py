@@ -45,8 +45,9 @@ class Store:
         self.database_path = database_path
         self.audit_hmac_key = audit_hmac_key
         self.audit_key_id = audit_key_id if audit_hmac_key else "unsealed"
+        new_database = not self.database_path.exists()
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
-        self._initialize()
+        self._initialize(new_database=new_database)
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path, timeout=5.0)
@@ -60,7 +61,7 @@ class Store:
             pass
         return connection
 
-    def _initialize(self) -> None:
+    def _initialize(self, *, new_database: bool) -> None:
         with self._connect() as connection:
             connection.executescript(
                 """
@@ -117,23 +118,18 @@ class Store:
                 ON scan_runs(engagement_id, started_at DESC);
                 """
             )
-            self._ensure_audit_checkpoint(connection)
+            self._ensure_audit_checkpoint(connection, new_database=new_database)
 
-    def _ensure_audit_checkpoint(self, connection: sqlite3.Connection) -> None:
+    def _ensure_audit_checkpoint(
+        self, connection: sqlite3.Connection, *, new_database: bool
+    ) -> None:
         row = connection.execute("SELECT * FROM audit_checkpoint WHERE singleton=1").fetchone()
         if row is not None:
             if self.audit_hmac_key and row["signature"] is None:
-                signature = _checkpoint_signature(
-                    self.audit_hmac_key,
-                    event_count=int(row["event_count"]),
-                    head_hash=row["head_hash"],
-                    key_id=self.audit_key_id,
-                )
-                connection.execute(
-                    "UPDATE audit_checkpoint SET key_id=?, signature=? WHERE singleton=1",
-                    (self.audit_key_id, signature),
-                )
+                raise ConfigurationError("audit checkpoint signature is missing")
             return
+        if not new_database:
+            raise ConfigurationError("audit checkpoint is missing from an existing database")
         last = connection.execute(
             "SELECT event_hash FROM audit_events ORDER BY sequence DESC LIMIT 1"
         ).fetchone()
@@ -246,6 +242,8 @@ class Store:
                 or checkpoint["head_hash"] != previous_hash
             ):
                 raise ConfigurationError("audit checkpoint does not match persisted events")
+            if self.audit_hmac_key and checkpoint["signature"] is None:
+                raise ConfigurationError("audit checkpoint signature is missing")
             if checkpoint["signature"] is not None:
                 if self.audit_hmac_key is None:
                     raise ConfigurationError(
@@ -280,7 +278,9 @@ class Store:
                     digest,
                 ),
             )
-            sequence = int(cursor.lastrowid)
+            sequence = cursor.lastrowid
+            if sequence is None:
+                raise ConfigurationError("audit event insertion returned no sequence")
             next_count = event_count + 1
             signature = (
                 _checkpoint_signature(
@@ -361,6 +361,15 @@ class Store:
                 "sealed": bool(checkpoint["signature"]),
             }
         sealed = checkpoint["signature"] is not None
+        if self.audit_hmac_key and not sealed:
+            return {
+                "valid": False,
+                "events_checked": len(rows),
+                "head_hash": expected_previous,
+                "reason": "checkpoint_signature_missing",
+                "sealed": False,
+                "signature_verified": False,
+            }
         signature_verified: bool | None = None
         if sealed and self.audit_hmac_key is not None:
             if checkpoint["key_id"] != self.audit_key_id:

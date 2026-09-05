@@ -1,4 +1,9 @@
 import json
+import os
+import subprocess
+import sys
+
+import pytest
 
 from scopeguard_mcp.analyzers.repository import scan_repository
 
@@ -64,6 +69,40 @@ def test_repository_scan_supports_single_file_and_invalid_python(tmp_path):
     result = scan_repository(path, max_files=10, max_file_bytes=1_000)
     assert result["scanned_files"] == 1
     assert result["findings"] == []
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFOs")
+@pytest.mark.parametrize("replace_during_open", [False, True])
+def test_fifo_is_skipped_without_blocking_even_after_a_path_race(tmp_path, replace_during_open):
+    code = """
+import os
+import sys
+from pathlib import Path
+from scopeguard_mcp.analyzers import repository
+root = Path(sys.argv[1])
+path = root / "blocked.py"
+if sys.argv[2] == "True":
+    path.write_text("print(1)")
+    original_open = os.open
+    def raced_open(name, flags, *args, **kwargs):
+        if Path(name).name == "blocked.py":
+            path.unlink()
+            os.mkfifo(path)
+        return original_open(name, flags, *args, **kwargs)
+    os.supports_dir_fd.add(raced_open)
+    repository.os.open = raced_open
+else:
+    os.mkfifo(path)
+result = repository.scan_repository(root, max_files=1, max_file_bytes=100)
+assert result["scanned_files"] == 0
+assert result["skipped_files"] == 1
+"""
+    subprocess.run(
+        [sys.executable, "-c", code, str(tmp_path), str(replace_during_open)],
+        check=True,
+        timeout=5,
+        capture_output=True,
+    )
 
 
 def test_repository_scan_emits_deterministic_evidence(tmp_path):

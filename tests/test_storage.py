@@ -106,3 +106,35 @@ def test_scan_run_state_is_durable_and_transition_checked(tmp_path):
     assert runs[0]["manifest_sha256"] == "a" * 64
     with pytest.raises(ConfigurationError, match="transition"):
         store.fail_scan(scan_id, error_code="late")
+
+
+@pytest.mark.parametrize("remove_checkpoint", [False, True])
+def test_missing_seal_is_never_recreated_on_append_or_restart(tmp_path, remove_checkpoint):
+    path = tmp_path / "scopeguard.db"
+    key = b"k" * 32
+    store = Store(path, audit_hmac_key=key, audit_key_id="test")
+    store.append_audit(engagement_id=None, action="keep", outcome="allowed", details={})
+    store.append_audit(engagement_id=None, action="remove", outcome="denied", details={})
+    with sqlite3.connect(path) as connection:
+        connection.execute("DELETE FROM audit_events WHERE sequence=2")
+        if remove_checkpoint:
+            connection.execute("DELETE FROM audit_checkpoint")
+        else:
+            connection.execute(
+                "UPDATE audit_checkpoint SET signature=NULL, event_count=1, "
+                "head_hash=(SELECT event_hash FROM audit_events WHERE sequence=1)"
+            )
+    assert store.verify_audit_chain()["valid"] is False
+    with pytest.raises(ConfigurationError, match="checkpoint"):
+        store.append_audit(engagement_id=None, action="next", outcome="allowed", details={})
+    with pytest.raises(ConfigurationError, match="checkpoint"):
+        Store(path, audit_hmac_key=key, audit_key_id="test")
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0] == 1
+
+
+def test_existing_unsigned_store_requires_explicit_operator_recovery(tmp_path):
+    path = tmp_path / "scopeguard.db"
+    Store(path)
+    with pytest.raises(ConfigurationError, match="signature is missing"):
+        Store(path, audit_hmac_key=b"k" * 32)

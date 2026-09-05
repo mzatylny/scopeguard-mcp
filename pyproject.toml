@@ -45,6 +45,10 @@ scopeguard-mcp = "scopeguard_mcp.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/scopeguard_mcp"]
+core-metadata-version = "2.4"
+
+[tool.hatch.build.targets.sdist]
+core-metadata-version = "2.4"
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers --cov=scopeguard_mcp --cov-report=term-missing --cov-fail-under=90"
