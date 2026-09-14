@@ -120,6 +120,7 @@ class Store:
             self._ensure_audit_checkpoint(connection)
 
     def _ensure_audit_checkpoint(self, connection: sqlite3.Connection) -> None:
+        signature: str | None
         row = connection.execute("SELECT * FROM audit_checkpoint WHERE singleton=1").fetchone()
         if row is not None:
             if self.audit_hmac_key and row["signature"] is None:
@@ -280,7 +281,9 @@ class Store:
                     digest,
                 ),
             )
-            sequence = int(cursor.lastrowid)
+            sequence = cursor.lastrowid
+            if sequence is None:
+                raise ConfigurationError("audit event insertion returned no sequence")
             next_count = event_count + 1
             signature = (
                 _checkpoint_signature(
