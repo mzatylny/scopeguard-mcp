@@ -24,6 +24,20 @@ async def test_mcp_v2_discovers_and_calls_structured_tools(tmp_path, monkeypatch
                 "scan_repository",
                 "verify_audit_chain",
             }.issubset(names)
+            by_name = {tool.name: tool for tool in available.tools}
+            for name, read_only, destructive, idempotent in [
+                ("health", True, False, True),
+                ("create_dry_run_engagement", False, False, False),
+                ("revoke_engagement", False, True, False),
+            ]:
+                annotations = by_name[name].annotations
+                assert annotations is not None
+                assert annotations.model_dump(by_alias=True, exclude_none=True) == {
+                    "readOnlyHint": read_only,
+                    "destructiveHint": destructive,
+                    "idempotentHint": idempotent,
+                    "openWorldHint": False,
+                }
             health = await client.call_tool("health", {})
             assert health.structured_content["ok"] is True
             assert health.structured_content["execution_enabled"] is False
