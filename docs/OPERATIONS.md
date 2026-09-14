@@ -14,6 +14,12 @@
 
 ## Before an assessment
 
+Audit checkpoints are created only for a new database. An existing unsigned store is
+not automatically sealed when a key is added; missing checkpoints or signatures are
+treated as integrity failures. Preserve the old database for investigation and restore
+an independently verified backup, or initialize a new state directory and recreate
+operator grants after validating authorization. Do not delete a checkpoint to repair it.
+
 - Confirm the authorization ticket, target ownership, scope, and expiry with a human.
 - Prefer one repository root and the minimum capability set.
 - Keep engagement lifetimes short.

@@ -1,3 +1,4 @@
+import sqlite3
 from dataclasses import replace
 
 import pytest
@@ -189,3 +190,22 @@ def test_execute_scan_requires_and_records_signed_evidence(tmp_path):
     runs = sealed_service.list_scan_runs(sealed["id"])["runs"]
     assert runs[0]["id"] == completed["scan_id"]
     assert runs[0]["manifest_sha256"] == completed["analysis"]["evidence"]["manifest_sha256"]
+
+
+def test_scan_rejects_stripped_seal_before_appending_authorization(tmp_path):
+    settings = replace(
+        _settings(tmp_path, execution_enabled=True),
+        require_sealed_audit=True,
+        audit_hmac_key=b"s" * 32,
+        audit_key_id="test-key",
+    )
+    service = ScopeGuardService(settings)
+    engagement = _create(service, f"file:{tmp_path}", ["scan:repository"], mode="execute")
+    with sqlite3.connect(settings.database_path) as connection:
+        before = connection.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0]
+        connection.execute("UPDATE audit_checkpoint SET signature=NULL")
+    with pytest.raises(AuthorizationError, match="sealed audit"):
+        service.scan_repository(engagement["id"], str(tmp_path))
+    with sqlite3.connect(settings.database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0] == before
+        assert connection.execute("SELECT signature FROM audit_checkpoint").fetchone()[0] is None

@@ -199,6 +199,17 @@ class ScopeGuardService:
         return {"ok": True, "analysis": analysis}
 
     def scan_repository(self, engagement_id: str, path: str) -> dict[str, Any]:
+        # Authorization writes audit events, so verify the seal before calling it.
+        if self.settings.require_sealed_audit:
+            requested_engagement = self.store.get_engagement(engagement_id)
+            if requested_engagement.mode is EngagementMode.EXECUTE:
+                verification = self.store.verify_audit_chain()
+                if not (
+                    verification["valid"]
+                    and verification.get("sealed")
+                    and verification.get("signature_verified")
+                ):
+                    raise AuthorizationError("sealed audit verification is required for execution")
         engagement, normalized = self.policy.authorize(
             engagement_id=engagement_id,
             capability=Capability.SCAN_REPOSITORY,
@@ -238,22 +249,6 @@ class ScopeGuardService:
                 details={"target": normalized.display, "reason": reason},
             )
             raise AuthorizationError(reason)
-        if self.settings.require_sealed_audit:
-            verification = self.store.verify_audit_chain()
-            if not (
-                verification["valid"]
-                and verification.get("sealed")
-                and verification.get("signature_verified")
-            ):
-                reason = "sealed audit verification is required for execution"
-                self.store.append_audit(
-                    engagement_id=engagement_id,
-                    action="repository.scan",
-                    outcome="denied",
-                    details={"target": normalized.display, "reason": reason},
-                )
-                raise AuthorizationError(reason)
-
         scan_id = self.store.start_scan(
             engagement_id=engagement_id,
             target=normalized.display,
